@@ -172,6 +172,39 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(gun)
         self.assertEqual(gun[0].position, FRONT)
 
+    def test_gun_pulses_at_full_intensity(self):
+        # The gun's signature is a rhythm at full intensity, not a
+        # steady partial buzz: in a strafing dive the negative-G
+        # effect runs the same chest motors at the same level, and
+        # a steady frame there measures a zero signature over the
+        # chest wash. Short frames on the sustain cadence pulse.
+        base = dict(wow1=0, wow4=0, wow6=0, agl=500)
+        self.feed(make_tel(shells=200, **base))
+        frames = self.feed(make_tel(shells=185, **base))
+        gun = frames_with(frames, "gun")
+        self.assertTrue(gun)
+        self.assertEqual(gun[0].duration_ms, 60)
+        self.assertEqual(max(gun[0].points.values()), 100)
+
+    def test_negative_g_has_hysteresis(self):
+        base = dict(wow1=0, wow4=0, wow6=0, agl=500)
+
+        def g_points(gy, feeds=6):
+            found = []
+            for _ in range(feeds):
+                frames = self.feed(make_tel(gy=gy, **base))
+                found += [f for f in frames_with(frames, "g")
+                          if any(v > 0 for v in f.points.values())]
+            return found
+
+        # Below the entry step (onset 0.20, entry 0.15): on.
+        self.assertTrue(g_points(0.10))
+        # Inside the exit band (exit at 0.30): still on - without
+        # hysteresis this hunted on and off across the onset.
+        self.assertTrue(g_points(0.25))
+        # Above the exit step: off.
+        self.assertFalse(g_points(0.35))
+
     def test_g_tiers_climb_the_vest(self):
         base = dict(wow1=0, wow4=0, wow6=0, agl=500)
 

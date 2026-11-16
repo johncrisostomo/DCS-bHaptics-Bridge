@@ -40,6 +40,7 @@ class EffectEngine:
         self.taxi_next = 0.0
         self.airborne_since = None
         self.in_session = False
+        self._neg_g = False
 
     # -- helpers ---------------------------------------------------------
     def _scale(self, value):
@@ -79,6 +80,7 @@ class EffectEngine:
         """Suit check: a wave down the front, then the back, then all on."""
         self.in_session = True
         self.prev = None
+        self._neg_g = False
         self.pattern = []
         layout = self.layout
         t = 0.0
@@ -100,6 +102,7 @@ class EffectEngine:
         self.active = {}
         self.pattern = []
         self.prev = None
+        self._neg_g = False
         self.airborne_since = None
         return frames
 
@@ -140,12 +143,23 @@ class EffectEngine:
                     self._frame_points("g", FRONT, points, 160),
                     self._frame_points("g", BACK, points, 160),
                 ]
-            elif not cur.on_ground and cur.gy <= cfg.neg_g_onset:
-                intensity = 30 + (cfg.neg_g_onset - cur.gy) * 50.0
-                frames = [
-                    self._frame("g", FRONT, layout.chest(), intensity, 160),
-                    self._frame("g", BACK, layout.chest(), intensity, 160),
-                ]
+            elif not cur.on_ground:
+                # Negative G, with hysteresis: enter a step below
+                # the onset, stay until the load recovers a step
+                # above it. Without the band, an unsteady dive or
+                # bank hunts across the threshold and the chest
+                # chatters on and off instead of holding.
+                if self._neg_g and cur.gy > cfg.neg_g_onset + 0.10:
+                    self._neg_g = False
+                elif cur.gy <= cfg.neg_g_onset - 0.05:
+                    self._neg_g = True
+                if self._neg_g:
+                    intensity = min(100.0, max(
+                        30.0, 30 + (cfg.neg_g_onset - cur.gy) * 50.0))
+                    frames = [
+                        self._frame("g", FRONT, layout.chest(), intensity, 160),
+                        self._frame("g", BACK, layout.chest(), intensity, 160),
+                    ]
             out += self._sustain("g", frames, now)
 
         # Sustained: afterburner rumble, low back.
@@ -174,9 +188,17 @@ class EffectEngine:
         if cfg.effect_gun:
             frames = None
             if now - self.last_gun_time < 0.18:
-                gun_points = {i: 75 for i in layout.center([0])}
-                gun_points.update({i: 40 for i in layout.center([1])})
-                frames = [self._frame_points("gun", FRONT, gun_points, 110)]
+                # Full intensity, short frames: the 0.11 s sustain
+                # cadence re-emits them and each 60 ms frame ends
+                # before the next, so the burst pulses at ~9 Hz.
+                # A steady buzz is invisible exactly when the gun
+                # is used - a strafing dive, where the negative-G
+                # effect runs these same chest motors at the same
+                # level (measured signature over the chest wash:
+                # zero). The rhythm is the signature.
+                gun_points = {i: 100 for i in layout.center([0])}
+                gun_points.update({i: 55 for i in layout.center([1])})
+                frames = [self._frame_points("gun", FRONT, gun_points, 60)]
             out += self._sustain("gun", frames, now, period=0.11)
 
         # Gear transit thumps, and one solid thump when it locks.
