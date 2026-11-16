@@ -16,8 +16,8 @@ _DEFAULTS = {
     "flip_vertical": False,
     # [effects] thresholds
     "stall_aoa": 0.30,       # radians
-    "g_onset": 1.30,         # G where the squeeze starts
-    "g_full": 4.50,          # G where it reaches full intensity
+    "g_onset": 2.00,         # G where the squeeze starts
+    "g_full": 6.50,          # G where it reaches full intensity
     "neg_g_onset": 0.20,     # below this load, the negative-G feel starts
     # [effects] toggles
     "effect_g": True,
