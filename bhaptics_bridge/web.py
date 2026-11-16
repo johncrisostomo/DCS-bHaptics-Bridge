@@ -320,6 +320,14 @@ class WebConsole:
         self.httpd = None
 
     def status(self):
+        # The Player client connects lazily, on the first frame sent.
+        # With nothing submitted yet it would report "not connected"
+        # even when Player is running - the pill then stayed red until
+        # the first motor click forced a connection. The page polls
+        # this endpoint, so use the poll to establish (or re-establish)
+        # the connection and report the result.
+        with self.lock:
+            self.player.ensure_connected()
         return {
             "player_connected": bool(self.player.connected),
             "device": "TactSuit Pro",
