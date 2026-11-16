@@ -24,8 +24,9 @@ Modes:
         Drive the official bhaptics_python package
         (pip install bhaptics-python). Init, report player/device
         state, fire ONE front motor (index 0) at 70 for 600 ms unless
-        --no-dot, then optionally poll device info while you toggle
-        the vest.
+        --no-dot, then optionally poll both device-state sources
+        (the device info list and the direct is-connected query)
+        once a second while you toggle the vest.
     python tools\\probe_sdk2.py --raw [--seconds 25]
         Connect a plain websocket to the SDK2 endpoint with the same
         env credentials and print every message Player sends. Sends
@@ -100,16 +101,23 @@ def lib_mode(args):
             await asyncio.sleep(1.0)
             await _call(bp.stop_all)
         if args.listen:
-            print("polling device info for %d s - toggle the vest "
-                  "off and on now" % args.listen)
-            last = None
-            deadline = time.monotonic() + args.listen
+            print("polling BOTH device sources for %d s - toggle the "
+                  "vest off and on now" % args.listen)
+            started = time.monotonic()
+            deadline = started + args.listen
             while time.monotonic() < deadline:
+                elapsed = time.monotonic() - started
+                try:
+                    query = await _call(
+                        bp.is_bhaptics_device_connected, 0)
+                except TypeError:
+                    query = await _call(bp.is_bhaptics_device_connected)
+                except Exception as exc:  # the error is data too
+                    query = "raised: %r" % (exc,)
                 info = await _call(bp.get_device_info_json)
-                if info != last:
-                    print("  device info:", info)
-                    last = info
-                await asyncio.sleep(2)
+                print("  [t+%4.1fs] is_connected_query=%r device_info=%s"
+                      % (elapsed, query, info))
+                await asyncio.sleep(1)
         try:
             messages = await _call(bp.get_haptic_messages,
                                    app_id, api_key, "0.2.2")
