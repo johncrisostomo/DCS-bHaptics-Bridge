@@ -244,6 +244,20 @@ class _StubPlayer:
         pass
 
 
+class _LazyPlayer(_StubPlayer):
+    """Mimics the real client: not connected until ensure_connected()."""
+
+    def __init__(self):
+        super().__init__()
+        self.connected = False
+        self.ensure_calls = 0
+
+    def ensure_connected(self):
+        self.ensure_calls += 1
+        self.connected = True
+        return True
+
+
 class WebTests(unittest.TestCase):
     def make_console(self):
         stub = _StubPlayer()
@@ -290,6 +304,19 @@ class WebTests(unittest.TestCase):
         self.assertTrue(gun_frames, "lab gun produced no engine frames")
         console.lab.action("release")
         self.assertEqual(console.lab.describe()["stn"], 3)
+
+    def test_status_poll_establishes_player_connection(self):
+        # Regression: the pill stayed red until the first motor click
+        # because the client only connects when a frame is submitted.
+        # Polling the status must establish the connection by itself.
+        lazy = _LazyPlayer()
+        cfg = Config({"web_host": "127.0.0.1", "web_port": 0})
+        console = WebConsole(cfg, lazy, log=lambda *a: None)
+        self.addCleanup(console.stop)
+        self.assertFalse(lazy.connected)
+        status = console.status()
+        self.assertTrue(status["player_connected"])
+        self.assertGreaterEqual(lazy.ensure_calls, 1)
 
     def test_http_endpoints(self):
         console, stub = self.make_console()
