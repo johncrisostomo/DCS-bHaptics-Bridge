@@ -72,6 +72,10 @@ class _Sdk2Backend:
     async def device_info_json(self):
         return await _maybe_await(self.bp.get_device_info_json())
 
+    async def is_device_connected(self, position):
+        return await _maybe_await(
+            self.bp.is_bhaptics_device_connected(position))
+
     async def stop_all(self):
         return await _maybe_await(self.bp.stop_all())
 
@@ -134,6 +138,8 @@ class BhapticsPlayer2:
         self._devices = []
         self._devices_at = 0.0
         self._fetching = False
+        self._vest_connected = None   # last is-connected answer
+        self._vest_logged = "unset"   # last vest state written to the log
 
     # -- connection ---------------------------------------------------
 
@@ -221,17 +227,57 @@ class BhapticsPlayer2:
                 self._devices = parse_device_info(raw)
             except Exception as exc:
                 self.log("[player2] device info failed: %s" % exc)
-            finally:
-                self._devices_at = time.monotonic()
-                self._fetching = False
+            try:
+                self._vest_connected = bool(
+                    await self._backend.is_device_connected(VEST_POSITION))
+            except Exception:
+                pass  # advisory; the device info may still carry it
+            self._log_vest_transition()
+            self._devices_at = time.monotonic()
+            self._fetching = False
 
         self._schedule(fetch())
 
+    def _log_vest_transition(self):
+        """Log the vest's own state when Player's report changes.
+
+        This is the SDK2 difference that matters for status: the
+        bridge can report the suit itself, not just its socket to
+        Player.
+        """
+        status = self.device_status()
+        if status is None:
+            return
+        connected = status["connected"]
+        if connected is None or connected == self._vest_logged:
+            return
+        self._vest_logged = connected
+        if connected:
+            battery = status.get("battery")
+            suffix = (" (battery %s%%)" % battery
+                      if isinstance(battery, (int, float)) else "")
+            self.log("[player2] vest: connected%s" % suffix)
+        else:
+            self.log("[player2] vest: not connected")
+
     def device_status(self):
-        """Latest known vest state, or None if never reported."""
+        """Latest known vest state.
+
+        Always a dict on this transport (None only in dry-run,
+        where there is no Player to report anything): "connected"
+        is True/False once Player has reported the vest - from its
+        device info when present, else from the SDK's direct
+        is-connected query - and None while nothing has been
+        reported yet.
+        """
         if self.dry_run:
             return None
-        return vest_status(self._devices)
+        status = vest_status(self._devices)
+        if status is not None:
+            return status
+        return {"connected": self._vest_connected,
+                "paired": None,
+                "battery": None}
 
     # -- submission -----------------------------------------------------
 

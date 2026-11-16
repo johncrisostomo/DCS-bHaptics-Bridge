@@ -416,9 +416,11 @@ class TransportSelectionTests(unittest.TestCase):
 class _FakeBackend:
     """Async stand-in for _Sdk2Backend: records every call."""
 
-    def __init__(self, init_result=True, device_info="[]"):
+    def __init__(self, init_result=True, device_info="[]",
+                 vest_connected=True):
         self.init_result = init_result
         self.device_info = device_info
+        self.vest_connected = vest_connected
         self.init_calls = []
         self.dot_calls = []   # (duration_ms, values)
         self.stopped = False
@@ -430,6 +432,9 @@ class _FakeBackend:
 
     async def is_connected(self):
         return True
+
+    async def is_device_connected(self, position):
+        return self.vest_connected
 
     async def play_dot(self, duration_ms, values):
         self.dot_calls.append((duration_ms, list(values)))
@@ -520,13 +525,35 @@ class Player2Tests(unittest.TestCase):
                            "paired": True, "battery": 41}])
         backend = _FakeBackend(device_info=raw)
         player = self.make_player(backend)
-        self.assertIsNone(player.device_status())
+        # Before any report: a dict with connected=None, not None.
+        self.assertIsNone(player.device_status()["connected"])
         self.assertTrue(player.ensure_connected())
-        self.assertTrue(
-            _wait_for(lambda: player.device_status() is not None))
+        self.assertTrue(_wait_for(
+            lambda: player.device_status()["battery"] == 41))
         status = player.device_status()
+        # The device-info entry wins over the is-connected boolean.
         self.assertFalse(status["connected"])
         self.assertEqual(status["battery"], 41)
+
+    def test_device_status_falls_back_to_is_connected(self):
+        backend = _FakeBackend(device_info="[]", vest_connected=True)
+        player = self.make_player(backend)
+        self.assertTrue(player.ensure_connected())
+        self.assertTrue(_wait_for(
+            lambda: player.device_status()["connected"] is True))
+        self.assertIsNone(player.device_status()["battery"])
+
+    def test_vest_transitions_are_logged(self):
+        lines = []
+        raw = json.dumps([{"position": 0, "connected": True,
+                           "paired": True, "battery": 82}])
+        backend = _FakeBackend(device_info=raw)
+        player = BhapticsPlayer2(Config({}), backend=backend,
+                                 log=lines.append)
+        self.addCleanup(player.close)
+        self.assertTrue(player.ensure_connected())
+        self.assertTrue(_wait_for(
+            lambda: "[player2] vest: connected (battery 82%)" in lines))
 
 
 if __name__ == "__main__":

@@ -91,6 +91,12 @@ py -3.12 -m bhaptics_bridge --test
 
 (Only the legacy SDK1 transport skips this step.)
 
+**No-dependency alternative:** release **v0.3.0** is the frozen
+SDK1 build - standard library only, nothing to install. If you
+want that version, download it from the
+[releases page](https://github.com/johncrisostomo/DCS-bHaptics-Bridge/releases/tag/v0.3.0)
+instead of using this branch.
+
 ## Run
 
 1. Start bHaptics Player and connect the suit.
@@ -138,6 +144,11 @@ Vest pill. Two setup notes:
 - Behaviour: `play_dot` durations are floored at 100 ms (the
   vendor's recommended minimum), and the package maintains the
   Player connection itself, printing its own connection log lines.
+- Status: SDK2 reports the vest itself. The bridge logs the
+  vest's state when it changes (`[player2] vest: connected
+  (battery 82%)`), and the web console shows it in its Vest pill -
+  connected / not connected, with battery level when Player
+  reports one.
 
 **SDK1 (legacy).** The bridge's built-in client speaks Player's
 older websocket protocol directly - standard library only, no
@@ -146,7 +157,11 @@ the default: motors are addressed through a 20-point grid that
 must be translated to the Pro's motors (see Notes), and the
 protocol reports no device state. Set `transport = sdk1` to use
 it; it is the transport the v0.3.0 release shipped with, kept as a
-fallback.
+fallback. That release is also the standing no-dependency
+version: if you want the bridge with nothing to install, check
+out
+[v0.3.0](https://github.com/johncrisostomo/DCS-bHaptics-Bridge/releases/tag/v0.3.0)
+instead - it is frozen and receives no new features.
 
 ## Web console
 

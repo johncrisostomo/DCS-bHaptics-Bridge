@@ -322,13 +322,21 @@ async function poll() {
       "Bridge ↔ Player: " + (s.player_connected ? "connected" : "not connected");
     $("mapPill").textContent = "Mapping: " + s.mapping_source;
 
-    // Vest pill: only when the transport reports device state (SDK2).
+    // Vest pill: the suit's own state, reported by Player over
+    // SDK2. Hidden only when the transport cannot report it (SDK1).
     if (s.vest) {
       $("vestPill").style.display = "";
-      $("vestPill").classList.toggle("on", !!s.vest.connected);
-      let text = "Vest: " + (s.vest.connected ? "connected" : "not connected");
-      if (s.vest.connected && typeof s.vest.battery === "number")
-        text += " · " + s.vest.battery + "%";
+      $("vestPill").classList.toggle("on", s.vest.connected === true);
+      let text;
+      if (s.vest.connected === true) {
+        text = "Vest: connected";
+        if (typeof s.vest.battery === "number")
+          text += " · " + s.vest.battery + "%";
+      } else if (s.vest.connected === false) {
+        text = "Vest: not connected";
+      } else {
+        text = "Vest: no report from Player yet";
+      }
       $("vestText").textContent = text;
     } else {
       $("vestPill").style.display = "none";
