@@ -102,6 +102,8 @@ are `web_host` / `web_port` in the config). It has three parts:
   release, gun, countermeasures, damage, taxi — can be tested without
   starting DCS.
 
+![The web console: TactSuit Pro motor diagrams and the effect lab](docs/web-console.png)
+
 There is no authentication: anyone on the LAN who opens the page can
 drive the suit. Trusted networks only.
 
