@@ -301,6 +301,8 @@ class WebTests(unittest.TestCase):
             page = resp.read().decode("utf-8")
         self.assertIn("TactSuit Pro", page)
         self.assertIn("Effect lab", page)
+        self.assertIn("vestFront", page)
+        self.assertIn("OUTLINE", page)
 
         with urllib.request.urlopen(base + "/api/status", timeout=5) as resp:
             status = json.loads(resp.read())

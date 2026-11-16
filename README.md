@@ -90,11 +90,13 @@ are `web_host` / `web_port` in the config). It has three parts:
 - **Status.** Whether the bridge is connected to bHaptics Player. The
   protocol cannot report whether the vest itself is powered and
   paired; that is shown in Player's own window.
-- **Motor test.** The TactSuit Pro drawn front and back with the
-  official motor numbers (front in mirror view, as in the bHaptics
-  diagram). Pressing and holding a motor vibrates it until released,
-  through the same Pro-to-grid translation the effects use (seed
-  table, or `pro_mapping.json` when present).
+- **Motor test.** The TactSuit Pro drawn front and back as a vest
+  outline, motors positioned where they sit on the body and numbered
+  with the official motor index (front in mirror view, as in the
+  bHaptics diagram; the wearer's left and right are labelled).
+  Pressing and holding a motor vibrates it until released, through
+  the same Pro-to-grid translation the effects use (seed table, or
+  `pro_mapping.json` when present).
 - **Effect lab.** The effect engine fed with synthetic telemetry, so
   every effect — G load, afterburner, stall, gear, touchdown, weapon
   release, gun, countermeasures, damage, taxi — can be tested without
