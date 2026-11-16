@@ -47,18 +47,18 @@
   .suit { flex: 1 1 320px; }
   .suit h3 { margin: 0 0 3px; font-size: 14px; font-weight: 600; }
   .suit .cap { color: var(--dim); font-size: 12px; margin-bottom: 10px; }
-  .grid {
-    display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
-    max-width: 340px;
+  .vest { width: 100%; max-width: 350px; display: block; }
+  .vest-outline { fill: #232d38; stroke: var(--line); stroke-width: 2; }
+  .vest-detail { stroke: var(--line); stroke-width: 1.5; fill: none; }
+  .vest-tag { fill: var(--dim); font-size: 12px; }
+  .motor { cursor: pointer; touch-action: none; -webkit-tap-highlight-color: transparent; }
+  .motor circle { fill: var(--panel2); stroke: var(--line); stroke-width: 2; }
+  .motor text {
+    fill: var(--text); font-size: 16px; text-anchor: middle;
+    dominant-baseline: central; pointer-events: none; user-select: none;
   }
-  .motor {
-    aspect-ratio: 1; border-radius: 50%; border: 2px solid var(--line);
-    background: var(--panel2); color: var(--text); font-size: 16px;
-    display: flex; align-items: center; justify-content: center;
-    cursor: pointer; user-select: none; -webkit-user-select: none;
-    touch-action: none; -webkit-tap-highlight-color: transparent;
-  }
-  .motor.held { background: var(--accent); border-color: var(--accent); color: #161310; font-weight: 700; }
+  .motor.held circle { fill: var(--accent); stroke: var(--accent); }
+  .motor.held text { fill: #161310; font-weight: 700; }
   .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 10px 0; }
   .row label { min-width: 128px; color: var(--dim); font-size: 14px; }
   .row output { min-width: 64px; font-variant-numeric: tabular-nums; }
@@ -98,21 +98,23 @@
 
   <section>
     <h2>Motor test</h2>
-    <p class="sub">Press and hold a motor to vibrate it; release to stop. Numbering is bHaptics'
-      official motor index. The front is drawn as you see it looking at someone wearing the
-      vest (mirror view), the back as drawn in the official diagram.</p>
+    <p class="sub">Press and hold a motor to vibrate it; release to stop. The motors sit on a
+      vest outline where they sit on the body. Numbering is bHaptics' official motor index.
+      The front is drawn as you see it looking at someone wearing the vest (mirror view,
+      so the wearer's right is on your left); the back as you see it looking at their back.</p>
     <div class="suits">
       <div class="suit">
         <h3>Front</h3>
         <div class="cap">Motors 0–15</div>
-        <div class="grid" id="gridFront"></div>
+        <div id="vestFront"></div>
       </div>
       <div class="suit">
         <h3>Back</h3>
         <div class="cap">Motors 16–31</div>
-        <div class="grid" id="gridBack"></div>
+        <div id="vestBack"></div>
       </div>
     </div>
+    <p class="counts" id="holdReadout">Holding: —</p>
     <div class="row" style="margin-top:16px">
       <label for="holdIntensity">Hold intensity</label>
       <input type="range" id="holdIntensity" min="10" max="100" step="5" value="80">
@@ -191,38 +193,77 @@ async function post(path, obj) {
   } catch (e) { /* status poll will show the disconnect */ }
 }
 
-// ---- motor grids ------------------------------------------------------
+// ---- motor diagrams -----------------------------------------------------
+// Motor numbers in drawing order, per the official bHaptics diagram:
+// front in mirror view (wearer's right on image-left), back as seen
+// looking at the wearer's back.
 const FRONT_DRAWN = [[3,2,1,0],[7,6,5,4],[11,10,9,8],[15,14,13,12]];
 const BACK_DRAWN  = [[16,17,18,19],[20,21,22,23],[24,25,26,27],[28,29,30,31]];
+const COLS = [95, 152, 208, 265];
+const ROWS = [122, 187, 252, 317];
+const ROW_NAMES = ["top row", "second row", "third row", "bottom row"];
+const OUTLINE = "M150 30 C166 46 194 46 210 30 C246 38 278 46 298 60 " +
+  "C312 96 314 122 310 152 C306 210 296 260 292 310 C289 350 288 390 288 424 " +
+  "L72 424 C72 390 71 350 68 310 C64 260 54 210 50 152 C46 122 48 96 62 60 " +
+  "C82 46 114 38 150 30 Z";
 const motorEls = {};
 
-function buildGrid(el, drawn, side) {
-  for (const row of drawn) for (const n of row) {
-    const d = document.createElement("div");
-    d.className = "motor";
-    d.textContent = n;
-    d.dataset.side = side;
-    d.dataset.motor = n;
-    motorEls[side + ":" + n] = d;
-    d.addEventListener("pointerdown", ev => {
+function describeHold(side, motor) {
+  const drawn = side === "front" ? FRONT_DRAWN : BACK_DRAWN;
+  for (let r = 0; r < 4; r++)
+    if (drawn[r].includes(motor))
+      return (side === "front" ? "Front" : "Back") + " motor " + motor +
+             " — " + ROW_NAMES[r] + " from the top";
+  return "Motor " + motor;
+}
+
+function buildVest(el, drawn, side) {
+  const front = side === "front";
+  let s = '<svg class="vest" viewBox="0 0 360 450" role="img" aria-label="' +
+          side + ' of the vest">';
+  s += '<path class="vest-outline" d="' + OUTLINE + '"/>';
+  if (front) {
+    s += '<line class="vest-detail" x1="180" y1="60" x2="180" y2="424" stroke-dasharray="5 5"/>';
+    s += '<text class="vest-tag" x="8" y="18">wearer\'s right</text>';
+    s += '<text class="vest-tag" x="352" y="18" text-anchor="end">wearer\'s left</text>';
+  } else {
+    s += '<line class="vest-detail" x1="180" y1="70" x2="180" y2="424"/>';
+    s += '<line class="vest-detail" x1="86" y1="170" x2="274" y2="170"/>';
+    s += '<line class="vest-detail" x1="80" y1="290" x2="280" y2="290"/>';
+    s += '<text class="vest-tag" x="8" y="18">wearer\'s left</text>';
+    s += '<text class="vest-tag" x="352" y="18" text-anchor="end">wearer\'s right</text>';
+  }
+  for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) {
+    const n = drawn[r][c];
+    s += '<g class="motor" data-side="' + side + '" data-motor="' + n + '">' +
+         '<circle cx="' + COLS[c] + '" cy="' + ROWS[r] + '" r="23"/>' +
+         '<text x="' + COLS[c] + '" y="' + ROWS[r] + '">' + n + '</text></g>';
+  }
+  s += "</svg>";
+  el.innerHTML = s;
+  for (const g of el.querySelectorAll(".motor")) {
+    const n = +g.dataset.motor;
+    motorEls[side + ":" + n] = g;
+    g.addEventListener("pointerdown", ev => {
       ev.preventDefault();
-      d.setPointerCapture(ev.pointerId);
-      d.classList.add("held");
+      g.setPointerCapture(ev.pointerId);
+      g.classList.add("held");
+      $("holdReadout").textContent = "Holding: " + describeHold(side, n);
       post("/api/hold", {side, motor: n, intensity: +$("holdIntensity").value});
     });
     const release = () => {
-      if (d.classList.contains("held")) {
-        d.classList.remove("held");
+      if (g.classList.contains("held")) {
+        g.classList.remove("held");
+        $("holdReadout").textContent = "Holding: —";
         post("/api/hold/stop");
       }
     };
-    d.addEventListener("pointerup", release);
-    d.addEventListener("pointercancel", release);
-    el.appendChild(d);
+    g.addEventListener("pointerup", release);
+    g.addEventListener("pointercancel", release);
   }
 }
-buildGrid($("gridFront"), FRONT_DRAWN, "front");
-buildGrid($("gridBack"), BACK_DRAWN, "back");
+buildVest($("vestFront"), FRONT_DRAWN, "front");
+buildVest($("vestBack"), BACK_DRAWN, "back");
 
 $("holdIntensity").addEventListener("input", e =>
   $("holdIntensityOut").textContent = e.target.value);
@@ -284,6 +325,10 @@ async function poll() {
     if (s.hold) {
       const el = motorEls[s.hold.side + ":" + s.hold.motor];
       if (el) el.classList.add("held");
+      $("holdReadout").textContent =
+        "Holding: " + describeHold(s.hold.side, s.hold.motor);
+    } else {
+      $("holdReadout").textContent = "Holding: —";
     }
     const lab = s.lab;
     if (!gHeld) { gy.value = lab.gy; $("gyOut").textContent = lab.gy.toFixed(1) + " G"; }

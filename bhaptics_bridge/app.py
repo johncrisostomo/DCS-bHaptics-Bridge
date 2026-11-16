@@ -68,7 +68,6 @@ def run(cfg, dry_run, web=False):
     if web:
         submit_lock = threading.Lock()
         console = WebConsole(cfg, player, submit_lock=submit_lock).start()
-        print("  web:       http://%s:%d" % (cfg.web_host, cfg.web_port))
     print("  waiting for DCS telemetry... (Ctrl+C to stop)")
 
     in_session = False

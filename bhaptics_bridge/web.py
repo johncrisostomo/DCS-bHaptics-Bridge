@@ -403,8 +403,14 @@ class WebConsole:
         thread = threading.Thread(target=self.httpd.serve_forever,
                                   daemon=True)
         thread.start()
-        self.log("[web] console at http://%s:%d (LAN, no authentication)"
-                 % (self.cfg.web_host, self.cfg.web_port))
+        # 0.0.0.0 is a bind address, not an address a browser can open;
+        # name the reachable ones instead.
+        if self.cfg.web_host in ("0.0.0.0", ""):
+            where = ("http://localhost:%d on this PC; on the LAN use this "
+                     "PC's IP address" % self.cfg.web_port)
+        else:
+            where = "http://%s:%d" % (self.cfg.web_host, self.cfg.web_port)
+        self.log("[web] console at %s (no authentication)" % where)
         return self
 
     def stop(self):
