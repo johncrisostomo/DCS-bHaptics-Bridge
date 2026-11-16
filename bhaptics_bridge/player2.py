@@ -1,4 +1,4 @@
-"""bHaptics Player client: the SDK2 transport (v2 track).
+"""bHaptics Player client: the SDK2 transport (the default).
 
 Same role as player.py, spoken through the official bhaptics-python
 package instead of the hand-written SDK1 websocket client:

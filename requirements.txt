@@ -1,0 +1,4 @@
+# Only needed for the default SDK2 transport. The legacy SDK1
+# transport (transport = sdk1 in config.ini) uses the Python
+# standard library only and needs nothing here.
+bhaptics-python==0.2.2

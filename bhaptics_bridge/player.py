@@ -1,5 +1,8 @@
 """bHaptics Player client: the SDK1 websocket protocol, spoken directly.
 
+Legacy transport (config: transport = sdk1). The default transport
+is player2.py (SDK2).
+
 Connects to ws://127.0.0.1:15881/v2/feedbacks with the app id/name as
 query parameters, and submits dot-mode frames as JSON:
 

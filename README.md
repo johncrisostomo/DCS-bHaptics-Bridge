@@ -6,42 +6,10 @@ sends flight data to the companion over UDP on localhost. The companion
 converts the data into effects and sends motor commands to bHaptics
 Player over a websocket.
 
-Source only: no installer, and nothing compiled is shipped. The
-default (SDK1) transport also needs no accounts and no API keys.
-
-## This branch: the v2 (SDK2) track
-
-This branch is the parallel v2 track. `main` carries the released
-v0.3.0 (SDK1) line and is unchanged; here, the Player transport is
-selectable in `config.ini`:
-
-```
-transport = sdk1   ; default - the built-in client, exactly as released
-transport = sdk2   ; the official SDK2 package (this track's work)
-```
-
-What SDK2 changes, practically:
-
-- **Setup:** needs `pip install bhaptics-python` - the project's
-  only third-party dependency, isolated in
-  `bhaptics_bridge/player2.py` - and, if Player enforces it,
-  credentials from a haptic app registered in the bHaptics
-  Developer Portal (`sdk2_app_id` / `sdk2_api_key` in `config.ini`,
-  which is gitignored; the API key is a secret and is never logged).
-  Whether empty credentials work is an open experiment; see
-  `docs/v2-plan.md`.
-- **Motors:** addressed directly (one intensity per real motor).
-  The SDK1 grid translation (`pro_map.py`, the seed table,
-  calibration) does not apply on this transport.
-- **Web console:** gains a Vest pill with the vest's own connection
-  state and battery level, which SDK1 cannot report.
-- **Behaviour notes:** `play_dot` durations are floored at 100 ms
-  (the vendor's recommended minimum); the package maintains the
-  Player connection itself and prints its own connection log lines.
-- **Status:** implemented and unit-tested (23 tests, mock backend).
-  Not yet verified on real hardware - that check is milestone M4 in
-  `docs/v2-plan.md`, and until it passes, v0.3.0 on `main` remains
-  the verified release.
+Source only: no installer, and nothing compiled is shipped by this
+project. The companion talks to bHaptics Player through the official
+SDK2 package (see Transport, below); a legacy SDK1 transport is
+included and needs no package, no account, and no API keys.
 
 ## Scope
 
@@ -73,9 +41,10 @@ DCS World --(Lua export script, UDP 127.0.0.1:41231)--> Python companion --(WebS
 - Windows 10 or later
 - DCS World (Steam or standalone)
 - bHaptics Player, with a TactSuit Pro connected
-- Python 3.10 or later. Standard library only for the SDK1
-  transport; the SDK2 transport additionally needs
-  `bhaptics-python` (supports Python 3.8-3.12)
+- Python 3.10 or later (3.12 at most: the SDK2 package supports
+  Python 3.8-3.12). The default SDK2 transport needs the
+  `bhaptics-python` package; the legacy SDK1 transport needs only
+  the standard library
 
 ## Install
 
@@ -102,7 +71,14 @@ DCS World --(Lua export script, UDP 127.0.0.1:41231)--> Python companion --(WebS
 
 ### Python side
 
-No installation. Keep the folder anywhere.
+Keep the folder anywhere. For the default SDK2 transport, install
+the one dependency:
+
+```
+pip install -r requirements.txt
+```
+
+(Only the legacy SDK1 transport skips this step.)
 
 ## Run
 
@@ -127,22 +103,56 @@ To stop, close the console window or press `Ctrl+C`.
   (takeoff, gear cycle, G pull, weapon release, gun burst, damage,
   touchdown) to the bridge without DCS.
 
+## Transport
+
+The bridge reaches bHaptics Player through one of two transports,
+chosen by `transport` in `config.ini`. Everything above the
+transport - the Lua script, telemetry, effects, web console - is
+identical either way.
+
+**SDK2 (default).** The official `bhaptics-python` package speaks
+to Player's current protocol. Motors are addressed directly, one
+intensity per real motor (front 0-15, back 16-31), and Player
+reports device state back, which is what powers the web console's
+Vest pill. Two setup notes:
+
+- Credentials: SDK2 initialization takes an App ID and API key
+  from a haptic app registered in the bHaptics Developer Portal
+  (free). Put them in `config.ini` (`sdk2_app_id`, `sdk2_api_key`)
+  or the `BHAPTICS_APP_ID` / `BHAPTICS_API_KEY` environment
+  variables. The API key is a secret: `config.ini` is gitignored,
+  and the bridge never logs it. Whether Player accepts empty
+  credentials for direct motor playback is untested - if init is
+  refused with empty values, register the app and fill them in.
+- Behaviour: `play_dot` durations are floored at 100 ms (the
+  vendor's recommended minimum), and the package maintains the
+  Player connection itself, printing its own connection log lines.
+
+**SDK1 (legacy).** The bridge's built-in client speaks Player's
+older websocket protocol directly - standard library only, no
+package, no account, no credentials. Its limits are why SDK2 is
+the default: motors are addressed through a 20-point grid that
+must be translated to the Pro's motors (see Notes), and the
+protocol reports no device state. Set `transport = sdk1` to use
+it; it is the transport the v0.3.0 release shipped with, kept as a
+fallback.
+
 ## Web console
 
 `python -m bhaptics_bridge --web` also serves a web page on the local
 network, at `http://<this PC's address>:41232` (port and bind address
 are `web_host` / `web_port` in the config). It has three parts:
 
-- **Status.** Whether the bridge is connected to bHaptics Player. The
-  protocol cannot report whether the vest itself is powered and
-  paired; that is shown in Player's own window.
+- **Status.** Whether the bridge is connected to bHaptics Player,
+  and - on the default SDK2 transport - whether the vest itself is
+  connected, with its battery level. (The SDK1 protocol cannot
+  report vest state; there it is shown in Player's own window.)
 - **Motor test.** The TactSuit Pro drawn front and back as a vest
   outline, motors positioned where they sit on the body and numbered
   with the official motor index (front in mirror view, as in the
   bHaptics diagram; the wearer's left and right are labelled).
   Pressing and holding a motor vibrates it until released, through
-  the same Pro-to-grid translation the effects use (seed table, or
-  `pro_mapping.json` when present).
+  the same submission path the effect frames use.
 - **Effect lab.** The effect engine fed with synthetic telemetry, so
   every effect — G load, afterburner, stall, gear, touchdown, weapon
   release, gun, countermeasures, damage, taxi — can be tested without
@@ -174,28 +184,32 @@ drive the suit. Trusted networks only.
 ## Configuration
 
 Copy `config.example.ini` to `config.ini` and edit. All settings are
-optional. Available settings: master intensity scale, per-effect switches,
-stall AoA threshold, G onset and full-scale values, and UDP and Player
-ports.
+optional. Available settings: the Player transport and SDK2
+credentials (see Transport), master intensity scale, per-effect
+switches, stall AoA threshold, G onset and full-scale values, and
+UDP, Player, and web console ports.
 
 ## Notes
 
-- Player protocol: bHaptics' SDK1 websocket interface,
-  `ws://127.0.0.1:15881/v2/feedbacks`. JSON field names use PascalCase,
-  matching observed SDK1 client traffic. Confirmed working against
-  bHaptics Player on 2026-11-16.
+- Player protocols: the default transport uses bHaptics' SDK2
+  through the official `bhaptics-python` package (isolated in
+  `bhaptics_bridge/player2.py`; it is the only place the package is
+  imported). The legacy transport speaks the SDK1 websocket
+  interface, `ws://127.0.0.1:15881/v2/feedbacks`, with PascalCase
+  JSON field names matching observed SDK1 client traffic; it was
+  confirmed working against bHaptics Player on 2026-11-16.
 - Motor layout: the TactSuit Pro has 32 motors, 16 per side in a 4x4
   grid. Effects are defined directly on those motors, numbered as in
   bHaptics' Motor Index page: front 0-15, back 16-31, row-major from
   the top-left of each side.
-- Grid translation: frames are submitted over the SDK1 protocol, whose
-  vest grid has 20 points per side. The bridge translates Pro motors to
-  grid points (`bhaptics_bridge/pro_map.py`). How Player maps the grid
-  onto the Pro is not published, so the built-in table is an assumption
-  and is marked as a seed in the code. Run
-  `python tools\calibrate_pro.py` once to measure the mapping on your
-  own suit; it writes `pro_mapping.json`, which the bridge then loads
-  automatically.
+- Grid translation (SDK1 transport only): the SDK1 vest grid has 20
+  points per side, so the bridge translates Pro motors to grid
+  points (`bhaptics_bridge/pro_map.py`). How Player maps the grid
+  onto the Pro is not published, so the built-in table is an
+  assumption and is marked as a seed in the code. Run
+  `python tools\calibrate_pro.py` once to measure the mapping on
+  your own suit; it writes `pro_mapping.json`, which the bridge
+  then loads automatically. The SDK2 transport needs none of this.
 - DCS provides no export signal for ejection. There is no ejection effect.
 - Multiplayer: the export script is installed in Saved Games and does not
   modify DCS install files. Servers can restrict which export data is
@@ -211,9 +225,9 @@ this folder. No other files are modified.
 
 ```
 lua\              the DCS export script
-bhaptics_bridge\  the companion (telemetry, effects, Player client)
-tools\            fake_telemetry.py (scripted flight), mock_player.py (fake Player server), calibrate_pro.py (measure the grid-to-Pro mapping)
-tests\            python -m unittest discover tests
+bhaptics_bridge\  the companion (telemetry, effects, Player clients)
+tools\            fake_telemetry.py (scripted flight), calibrate_pro.py (measure the SDK1 grid-to-Pro mapping), probe_device_status.py and probe_sdk2.py (Player protocol probes)
+tests\            python -m unittest discover tests (mock_player.py is the fake SDK1 Player server)
 ```
 
 MIT license. See `LICENSE`.

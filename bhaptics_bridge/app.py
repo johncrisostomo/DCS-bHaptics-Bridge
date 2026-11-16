@@ -19,9 +19,9 @@ SESSION_TIMEOUT = 1.5  # seconds without an aircraft before the session ends
 
 def make_player(cfg, dry_run):
     """The configured Player transport (config key: transport)."""
-    if getattr(cfg, "transport", "sdk1") == "sdk2":
-        return BhapticsPlayer2(cfg, dry_run=dry_run)
-    return BhapticsPlayer(cfg, dry_run=dry_run)
+    if getattr(cfg, "transport", "sdk2") == "sdk1":
+        return BhapticsPlayer(cfg, dry_run=dry_run)
+    return BhapticsPlayer2(cfg, dry_run=dry_run)
 
 
 def _submit_all(player, frames, lock=None):
@@ -69,7 +69,7 @@ def run(cfg, dry_run, web=False):
     print("DCS bHaptics Bridge")
     print("  telemetry: udp %s:%d" % (cfg.udp_host, cfg.udp_port))
     print("  player:    %s (%s)" % (
-        getattr(cfg, "transport", "sdk1"),
+        getattr(cfg, "transport", "sdk2"),
         "dry-run" if dry_run else cfg.app_name))
 
     console = None

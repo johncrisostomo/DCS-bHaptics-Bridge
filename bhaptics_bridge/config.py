@@ -14,12 +14,12 @@ _DEFAULTS = {
     "player_port": 15881,
     "app_id": "dcs_bhaptics_bridge",
     "app_name": "DCS bHaptics Bridge",
-    # Player transport: "sdk1" (built-in client) or "sdk2"
-    # (bhaptics-python package; v2 track). The sdk2 credentials come
-    # from a bHaptics Developer Portal app; the API key is a secret
-    # and belongs only in config.ini (gitignored) or the
-    # BHAPTICS_APP_ID / BHAPTICS_API_KEY environment variables.
-    "transport": "sdk1",
+    # Player transport: "sdk2" (default; the official bhaptics-python
+    # package) or "sdk1" (legacy built-in client). The sdk2
+    # credentials come from a bHaptics Developer Portal app; the API
+    # key is a secret and belongs only in config.ini (gitignored) or
+    # the BHAPTICS_APP_ID / BHAPTICS_API_KEY environment variables.
+    "transport": "sdk2",
     "sdk2_app_id": "",
     "sdk2_api_key": "",
     "master_scale": 1.0,

@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
 
 from bhaptics_bridge import pro_map
+from bhaptics_bridge.app import make_player
 from bhaptics_bridge.config import Config
 from bhaptics_bridge.effects import EffectEngine, Frame
 from bhaptics_bridge.layout import ProLayout, FRONT, BACK, absolute
@@ -398,6 +399,18 @@ class WebTests(unittest.TestCase):
         with urllib.request.urlopen(req, timeout=5) as resp:
             self.assertEqual(json.loads(resp.read()), {"ok": True})
         self.assertEqual(console.hold.describe()["motor"], 20)
+
+
+class TransportSelectionTests(unittest.TestCase):
+    def test_default_transport_is_sdk2(self):
+        player = make_player(Config({}), dry_run=True)
+        self.addCleanup(player.close)
+        self.assertIsInstance(player, BhapticsPlayer2)
+
+    def test_sdk1_selects_the_legacy_client(self):
+        player = make_player(Config({"transport": "sdk1"}), dry_run=True)
+        self.addCleanup(player.close)
+        self.assertIsInstance(player, BhapticsPlayer)
 
 
 class _FakeBackend:
