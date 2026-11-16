@@ -124,6 +124,30 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(gun)
         self.assertEqual(gun[0].position, FRONT)
 
+    def test_g_tiers_climb_the_vest(self):
+        base = dict(wow1=0, wow4=0, wow6=0, agl=500)
+
+        def g_indices(gy):
+            # The sustain cadence re-emits every 0.12 s; step past it.
+            for _ in range(5):
+                frames = self.feed(make_tel(gy=gy, **base))
+                g = frames_with(frames, "g")
+                if g:
+                    return set(g[0].points)
+            self.fail("no g frame at gy=%s" % gy)
+
+        # Ordinary maneuvering below onset: silent.
+        frames = self.feed(make_tel(gy=1.5, **base))
+        self.assertFalse(frames_with(frames, "g"))
+        # Moderate pull: lower rows only (indices 12-19).
+        idx = g_indices(3.0)
+        self.assertTrue(idx)
+        self.assertTrue(all(i >= 12 for i in idx))
+        # Hard pull: the shoulders (row 0, indices 0-3) have joined.
+        idx = g_indices(5.5)
+        self.assertTrue(any(i < 4 for i in idx))
+        self.assertTrue(any(i >= 12 for i in idx))
+
     def test_damage_pattern(self):
         base = dict(wow1=0, wow4=0, wow6=0, agl=500)
         self.feed(make_tel(warn=frozenset(), **base))

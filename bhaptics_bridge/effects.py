@@ -114,14 +114,27 @@ class EffectEngine:
         cfg = self.cfg
         layout = self.layout
 
-        # Sustained: G load. Positive G squeezes low, negative G pulls high.
+        # Sustained: G load. Positive G starts low and climbs the vest as
+        # the pull builds: lower rows from g_onset, mid rows from ~45% of
+        # the range, chest/shoulders from ~72%. Ordinary maneuvering
+        # (below g_onset) stays silent. Negative G pulls high.
         if cfg.effect_g:
             frames = None
             if cur.gy >= cfg.g_onset:
-                intensity = 30 + (cur.gy - cfg.g_onset) * (70.0 / max(0.1, cfg.g_full - cfg.g_onset))
+                span = max(0.1, cfg.g_full - cfg.g_onset)
+                frac = min(1.0, (cur.gy - cfg.g_onset) / span)
+                points = {i: 25 + 45 * frac for i in layout.lower()}
+                g_mid = cfg.g_onset + 0.45 * span
+                if cur.gy >= g_mid:
+                    mid_i = 25 + 60 * min(1.0, (cur.gy - g_mid) / (cfg.g_full - g_mid))
+                    points.update({i: mid_i for i in layout.rows([2])})
+                g_high = cfg.g_onset + 0.72 * span
+                if cur.gy >= g_high:
+                    high_i = 30 + 70 * min(1.0, (cur.gy - g_high) / (cfg.g_full - g_high))
+                    points.update({i: high_i for i in layout.rows([0, 1])})
                 frames = [
-                    self._frame("g", FRONT, layout.lower(), intensity, 160),
-                    self._frame("g", BACK, layout.lower(), intensity, 160),
+                    self._frame_points("g", FRONT, points, 160),
+                    self._frame_points("g", BACK, points, 160),
                 ]
             elif cur.gy <= cfg.neg_g_onset:
                 intensity = 30 + (cfg.neg_g_onset - cur.gy) * 50.0
@@ -135,8 +148,8 @@ class EffectEngine:
         if cfg.effect_burner:
             frames = None
             if cur.ab1 > 0.5 or cur.ab2 > 0.5:
-                frames = [self._frame("ab", BACK, layout.rows([2, 3, 4]),
-                                      45 + random.randint(-8, 8), 160)]
+                frames = [self._frame("ab", BACK, layout.rows([3, 4]),
+                                      38 + random.randint(-6, 6), 160)]
             out += self._sustain("ab", frames, now)
 
         # Sustained: stall buffet, whole vest shudder.
@@ -157,7 +170,9 @@ class EffectEngine:
         if cfg.effect_gun:
             frames = None
             if now - self.last_gun_time < 0.18:
-                frames = [self._frame("gun", FRONT, layout.center_front(), 75, 110)]
+                gun_points = {i: 75 for i in layout.rows_cols([0, 1], [1, 2])}
+                gun_points.update({i: 40 for i in layout.rows_cols([2], [1, 2])})
+                frames = [self._frame_points("gun", FRONT, gun_points, 110)]
             out += self._sustain("gun", frames, now, period=0.11)
 
         # Gear transit thumps, and one solid thump when it locks.

@@ -82,7 +82,7 @@ To stop: close the console window or press `Ctrl+C`.
 | Effect | Trigger | Feel |
 |---|---|---|
 | Suit check | First entering an aircraft | Wave down the front, then the back |
-| Positive G | Sustained load above ~1.3 G | Lower front + back squeeze, grows with G |
+| Positive G | Sustained load above ~2 G | Starts in the lower front + back and climbs the vest as G builds; shoulders join in a hard pull |
 | Negative G | Load below ~0.2 G | Chest / shoulders |
 | Afterburner | Burner lit (draw args 28/29) | Low back rumble |
 | Stall buffet | Angle of attack above threshold, airborne | Whole-vest shudder |
@@ -90,7 +90,7 @@ To stop: close the console window or press `Ctrl+C`.
 | Gear locked | Gear reaches up or down | One solid thump |
 | Touchdown | Struts compress after flight | Whole-vest thump, harder = firmer arrival |
 | Weapon release | A weapon station count drops | Sharp mid-torso thump |
-| Gun | Cannon shells decreasing | Rapid front-centre pulses |
+| Gun | Cannon shells decreasing | Rapid chest pulses |
 | Countermeasures | Chaff/flare count drops | Shoulder tick |
 | Damage | New failure on the warning panel | Three strong back pulses |
 | Taxi bumps | Rolling on the ground | Small thumps from vertical jolts |
