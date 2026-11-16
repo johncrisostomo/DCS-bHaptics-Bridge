@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import tempfile
+import urllib.request
 import threading
 import time
 import unittest
@@ -19,6 +20,7 @@ from bhaptics_bridge.config import Config
 from bhaptics_bridge.effects import EffectEngine
 from bhaptics_bridge.layout import ProLayout, FRONT, BACK, absolute
 from bhaptics_bridge.player import BhapticsPlayer
+from bhaptics_bridge.web import WebConsole
 from bhaptics_bridge.telemetry import Telemetry, parse_packet
 
 import mock_player
@@ -255,6 +257,126 @@ class PlayerIntegrationTests(unittest.TestCase):
         self.assertIn("Intensity", point)
         positions = {item["Submit"][0]["Frame"]["Position"] for item in sink}
         self.assertEqual(positions, {FRONT, BACK})
+
+
+class _StubPlayer:
+    """Records everything the web console sends to the Player."""
+
+    def __init__(self):
+        self.connected = True
+        self.dot_calls = []   # (key, position, points, duration_ms)
+        self.frames = []      # effect frames via submit()
+
+    def submit_dot(self, key, position, points, duration_ms):
+        self.dot_calls.append((key, position, dict(points), duration_ms))
+        return True
+
+    def submit(self, frame):
+        self.frames.append(frame)
+        return True
+
+    def ensure_connected(self):
+        return True
+
+    def poll(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class _LazyPlayer(_StubPlayer):
+    """Mimics the real client: not connected until ensure_connected()."""
+
+    def __init__(self):
+        super().__init__()
+        self.connected = False
+        self.ensure_calls = 0
+
+    def ensure_connected(self):
+        self.ensure_calls += 1
+        self.connected = True
+        return True
+
+
+class WebTests(unittest.TestCase):
+    def make_console(self):
+        stub = _StubPlayer()
+        cfg = Config({"web_host": "127.0.0.1", "web_port": 0})
+        console = WebConsole(cfg, stub, log=lambda *a: None)
+        self.addCleanup(console.stop)
+        return console, stub
+
+    def test_hold_submits_and_zeroes(self):
+        console, stub = self.make_console()
+        console.hold.start(FRONT, 5, 80)
+        time.sleep(0.35)
+        live = [c for c in stub.dot_calls
+                if c[0] == "web-hold" and c[2].get(5) == 80]
+        self.assertTrue(live, "hold never reached the player")
+        self.assertEqual(console.hold.describe()["motor"], 5)
+        console.hold.stop()
+        time.sleep(0.05)
+        zeroed = [c for c in stub.dot_calls
+                  if c[0] == "web-hold" and c[2].get(5) == 0]
+        self.assertTrue(zeroed, "hold stop never zeroed the motor")
+        self.assertIsNone(console.hold.describe())
+
+    def test_lab_drives_the_real_engine(self):
+        console, stub = self.make_console()
+        console.lab.set_state({"gy": 5.0})
+        console.lab.action("gun_start")
+        time.sleep(0.5)
+        console.lab.action("gun_stop")
+        state = console.lab.describe()
+        self.assertLess(state["shells"], 570)
+        g_frames = [f for f in stub.frames if f.key == "g"]
+        self.assertTrue(g_frames, "lab G load produced no engine frames")
+        gun_frames = [f for f in stub.frames if f.key == "gun"]
+        self.assertTrue(gun_frames, "lab gun produced no engine frames")
+        console.lab.action("release")
+        self.assertEqual(console.lab.describe()["stn"], 3)
+
+    def test_status_poll_establishes_player_connection(self):
+        # Regression: the pill stayed red until the first motor click
+        # because the client only connects when a frame is submitted.
+        # Polling the status must establish the connection by itself.
+        lazy = _LazyPlayer()
+        cfg = Config({"web_host": "127.0.0.1", "web_port": 0})
+        console = WebConsole(cfg, lazy, log=lambda *a: None)
+        self.addCleanup(console.stop)
+        self.assertFalse(lazy.connected)
+        status = console.status()
+        self.assertTrue(status["player_connected"])
+        self.assertGreaterEqual(lazy.ensure_calls, 1)
+
+    def test_http_endpoints(self):
+        console, stub = self.make_console()
+        console.start()
+        port = console.httpd.server_address[1]
+        base = "http://127.0.0.1:%d" % port
+
+        with urllib.request.urlopen(base + "/", timeout=5) as resp:
+            page = resp.read().decode("utf-8")
+        self.assertIn("TactSuit Pro", page)
+        self.assertIn("Effect lab", page)
+        self.assertIn("vestFront", page)
+        self.assertIn("OUTLINE", page)
+
+        with urllib.request.urlopen(base + "/api/status", timeout=5) as resp:
+            status = json.loads(resp.read())
+        self.assertEqual(status["device"], "TactSuit Pro")
+        self.assertTrue(status["player_connected"])
+        self.assertIn("lab", status)
+
+        req = urllib.request.Request(
+            base + "/api/hold", method="POST",
+            data=json.dumps({"side": "back", "motor": 20,
+                             "intensity": 60}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            self.assertEqual(json.loads(resp.read()), {"ok": True})
+        self.assertEqual(console.hold.describe()["motor"], 20)
 
 
 if __name__ == "__main__":

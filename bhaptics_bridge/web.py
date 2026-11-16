@@ -1,0 +1,404 @@
+"""Web console for the bridge: device view, motor test, effect lab.
+
+Served on the local network (default http://<this PC>:41232) when the
+bridge runs with --web. Standard library only, like the rest of the
+project. There is no authentication: anyone on the LAN who can open
+the page can drive the suit. Trusted networks only.
+
+Three things live here:
+
+- Status: whether the bridge is connected to bHaptics Player. (The
+  SDK1 protocol cannot report whether the vest itself is powered and
+  paired; that state is only visible in Player's own window. If Player
+  is connected here and the suit check fires, the full chain works.)
+- Motor test: the TactSuit Pro drawn front and back with the official
+  motor numbers. Pressing and holding a motor vibrates it until
+  released, translated to the SDK1 grid by bhaptics_bridge.pro_map -
+  the same translation the Player client applies to effect frames.
+- Effect lab: the bridge's real EffectEngine fed with synthetic
+  telemetry, so every effect (G, burner, stall, gear, touchdown,
+  release, gun, countermeasures, damage, taxi) can be tested on the
+  bench, without DCS.
+"""
+
+import json
+import os
+import tempfile
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from . import pro_map
+from .effects import EffectEngine
+from .layout import FRONT, BACK, ProLayout, absolute
+from .telemetry import Telemetry
+
+HOLD_KEY = "web-hold"
+HOLD_TIMEOUT = 15.0       # seconds; a stuck hold stops itself
+LAB_TICK = 0.05           # 20 Hz, same cadence as the DCS loop
+
+
+def _mapping_and_source():
+    """The Pro -> grid mapping (bhaptics_bridge.pro_map) + its source.
+
+    Falls back to the seed if a measured pro_mapping.json exists but
+    cannot be parsed, rather than taking the console down.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    has_file = os.path.exists(os.path.join(root, "pro_mapping.json"))
+    try:
+        mapping = pro_map.load_mapping(root)
+    except (ValueError, TypeError, AttributeError, OSError):
+        with tempfile.TemporaryDirectory() as tmp:
+            mapping = pro_map.load_mapping(root=tmp)
+        return mapping, "seed (pro_mapping.json unreadable)"
+    return mapping, "pro_mapping.json" if has_file else "seed"
+
+
+class _Hold:
+    """One press-and-hold motor activation, re-submitted on a cadence."""
+
+    def __init__(self, player, mapping, submit_lock):
+        self.player = player
+        self.mapping = mapping
+        self.lock = submit_lock
+        # (position, pro_index, live grid dict, zero grid dict,
+        #  intensity, deadline)
+        self.state = None
+        self._stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def start(self, position, pro_index, intensity):
+        live = pro_map.translate(self.mapping, position,
+                                 {pro_index: intensity})
+        zero = pro_map.translate(self.mapping, position, {pro_index: 0})
+        self.state = (position, pro_index, live, zero, intensity,
+                      time.monotonic() + HOLD_TIMEOUT)
+
+    def stop(self):
+        if self.state is not None:
+            position, _pro, _live, zero, _i, _d = self.state
+            self.state = None
+            with self.lock:
+                self.player.submit_dot(HOLD_KEY, position, zero, 30)
+
+    def describe(self):
+        if self.state is None:
+            return None
+        position, pro_index, _live, _zero, intensity, _d = self.state
+        return {"side": "front" if position == FRONT else "back",
+                "motor": absolute(position, pro_index),
+                "intensity": intensity}
+
+    def _run(self):
+        while not self._stop.is_set():
+            state = self.state
+            if state is not None:
+                position, _pro, live, _zero, _i, deadline = state
+                if time.monotonic() > deadline:
+                    self.stop()
+                else:
+                    with self.lock:
+                        self.player.submit_dot(HOLD_KEY, position,
+                                               live, 150)
+            time.sleep(0.1)
+
+    def close(self):
+        self.stop()
+        self._stop.set()
+
+
+class EffectLab:
+    """The real EffectEngine, fed synthetic telemetry from the page."""
+
+    def __init__(self, cfg, player, submit_lock):
+        self.player = player
+        self.lock = submit_lock
+        self.engine = EffectEngine(cfg, ProLayout())
+        self.tel = Telemetry()
+        self.tel.ac = True
+        self.tel.name = "WEB_LAB"
+        self.tel.gy = 1.0
+        self.tel.gear = 1.0
+        self.tel.wow1 = self.tel.wow4 = self.tel.wow6 = 1.0
+        self.tel.shells = 578
+        self.tel.stn = 4
+        self.tel.chaff = 60
+        self.tel.flare = 60
+        # Page-controlled state.
+        self.gy = 1.0
+        self.burner = False
+        self.airborne = False
+        self.stall = False
+        self.taxi = False
+        self.taxi_speed = 15.0
+        self.firing = False
+        self.gear_target = 1.0
+        self._touchdown = None  # (sink, phase_deadline)
+        self._cm_flare_next = False
+        self._stop = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    # -- page API ------------------------------------------------------
+    def set_state(self, data):
+        if "gy" in data:
+            self.gy = max(-1.0, min(9.0, float(data["gy"])))
+        if "burner" in data:
+            self.burner = bool(data["burner"])
+        if "airborne" in data:
+            self.airborne = bool(data["airborne"])
+        if "stall" in data:
+            self.stall = bool(data["stall"])
+            if self.stall:
+                self.airborne = True
+        if "taxi" in data:
+            self.taxi = bool(data["taxi"])
+        if "taxi_speed" in data:
+            self.taxi_speed = max(0.0, min(40.0, float(data["taxi_speed"])))
+
+    def action(self, name, value=None):
+        now = time.monotonic()
+        if name == "check":
+            self.engine.start_session(now)
+        elif name == "release":
+            self.tel.stn = max(0, self.tel.stn - 1)
+        elif name == "cm":
+            if self._cm_flare_next:
+                self.tel.flare = max(0, self.tel.flare - 2)
+            else:
+                self.tel.chaff = max(0, self.tel.chaff - 2)
+            self._cm_flare_next = not self._cm_flare_next
+        elif name == "damage":
+            self.tel.warn = frozenset({"LeftEngineFailure"})
+        elif name == "repair":
+            self.tel.warn = frozenset()
+        elif name == "rearm":
+            self.tel.stn = 4
+            self.tel.shells = 578
+            self.tel.chaff = 60
+            self.tel.flare = 60
+            self.tel.warn = frozenset()
+        elif name == "gear":
+            self.gear_target = 0.0 if self.gear_target > 0.5 else 1.0
+        elif name == "gun_start":
+            self.firing = True
+        elif name == "gun_stop":
+            self.firing = False
+        elif name == "touchdown":
+            sink = 3.0 if value is None else max(1.0, min(6.0, float(value)))
+            self._touchdown = (sink, now + 0.9)
+
+    def describe(self):
+        return {
+            "gy": self.gy, "burner": self.burner,
+            "airborne": self.airborne, "stall": self.stall,
+            "taxi": self.taxi, "taxi_speed": self.taxi_speed,
+            "firing": self.firing, "gear": round(self.tel.gear, 2),
+            "shells": self.tel.shells, "stn": self.tel.stn,
+            "chaff": self.tel.chaff, "flare": self.tel.flare,
+            "damaged": bool(self.tel.warn),
+        }
+
+    # -- tick ------------------------------------------------------------
+    def _run(self):
+        while not self._stop.is_set():
+            now = time.monotonic()
+            tel = self.tel
+
+            if self._touchdown is not None:
+                sink, deadline = self._touchdown
+                if now < deadline:
+                    tel.wow1 = tel.wow4 = tel.wow6 = 0.0
+                    tel.agl = 20.0
+                    tel.vv = -sink
+                else:
+                    tel.wow1 = tel.wow4 = tel.wow6 = 1.0
+                    tel.agl = 0.0
+                    tel.vv = 0.0
+                    self._touchdown = None
+                    self.airborne = False
+            elif self.airborne:
+                tel.wow1 = tel.wow4 = tel.wow6 = 0.0
+                tel.agl = 500.0
+                tel.vv = 0.0
+            else:
+                tel.wow1 = tel.wow4 = tel.wow6 = 1.0
+                tel.agl = 0.0
+                tel.vv = 0.0
+
+            tel.gy = self.gy
+            if self.taxi and not self.airborne:
+                # Rolling jolts: brief load deviations over 1 G.
+                tel.tas = self.taxi_speed
+                phase = int(now * 7) % 5
+                tel.gy = 1.0 + (0.16 if phase == 0 else 0.02)
+            else:
+                tel.tas = 0.0
+
+            tel.ab1 = tel.ab2 = 1.0 if self.burner else 0.0
+            tel.aoa = 0.35 if self.stall else 0.05
+
+            # Gear transit at 0.5 / s (2 s end to end).
+            if tel.gear < self.gear_target:
+                tel.gear = min(self.gear_target, tel.gear + 0.5 * LAB_TICK)
+            elif tel.gear > self.gear_target:
+                tel.gear = max(self.gear_target, tel.gear - 0.5 * LAB_TICK)
+
+            if self.firing and tel.shells > 0:
+                tel.shells = max(0, tel.shells - 5)
+
+            # The engine detects events by comparing successive telemetry
+            # objects, so hand it a fresh snapshot each tick (exactly what
+            # the UDP receiver does with each parsed packet). Mutating one
+            # shared object would make every change invisible to it.
+            snap = Telemetry()
+            snap.ac = True
+            snap.name = tel.name
+            for key in ("gy", "gear", "wow1", "wow4", "wow6", "agl", "vv",
+                        "aoa", "tas", "ab1", "ab2", "shells", "stn",
+                        "chaff", "flare"):
+                setattr(snap, key, getattr(tel, key))
+            snap.warn = tel.warn
+
+            frames = self.engine.update(snap, now)
+            if frames:
+                with self.lock:
+                    for frame in frames:
+                        self.player.submit(frame)
+            time.sleep(LAB_TICK)
+
+    def close(self):
+        self._stop.set()
+
+
+def _page_bytes():
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "webui", "index.html")
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+class WebConsole:
+    """HTTP server + hold + lab, sharing the bridge's Player client."""
+
+    def __init__(self, cfg, player, log=print, submit_lock=None):
+        self.cfg = cfg
+        self.player = player
+        self.log = log
+        self.lock = submit_lock or threading.Lock()
+        self.mapping, self.mapping_source = _mapping_and_source()
+        self.hold = _Hold(player, self.mapping, self.lock)
+        self.lab = EffectLab(cfg, player, self.lock)
+        self.httpd = None
+
+    def status(self):
+        # The Player client connects lazily, on the first frame sent.
+        # With nothing submitted yet it would report "not connected"
+        # even when Player is running - the pill then stayed red until
+        # the first motor click forced a connection. The page polls
+        # this endpoint, so use the poll to establish (or re-establish)
+        # the connection and report the result.
+        with self.lock:
+            self.player.ensure_connected()
+        return {
+            "player_connected": bool(self.player.connected),
+            "device": "TactSuit Pro",
+            "mapping_source": self.mapping_source,
+            "hold": self.hold.describe(),
+            "lab": self.lab.describe(),
+        }
+
+    def start(self):
+        console = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *_args):
+                pass
+
+            def _json(self, obj, code=200):
+                body = json.dumps(obj).encode("utf-8")
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _body(self):
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    length = 0
+                if length <= 0 or length > 65536:
+                    return {}
+                try:
+                    return json.loads(self.rfile.read(length) or b"{}")
+                except ValueError:
+                    return {}
+
+            def do_GET(self):
+                if self.path in ("/", "/index.html"):
+                    body = _page_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                elif self.path == "/api/status":
+                    self._json(console.status())
+                else:
+                    self._json({"error": "not found"}, 404)
+
+            def do_POST(self):
+                data = self._body()
+                try:
+                    if self.path == "/api/hold":
+                        side = data.get("side")
+                        motor = int(data.get("motor"))
+                        intensity = int(data.get("intensity", 80))
+                        position = FRONT if side == "front" else BACK
+                        pro = motor if position == FRONT else motor - 16
+                        if side not in ("front", "back") or not 0 <= pro < 16:
+                            return self._json({"error": "bad motor"}, 400)
+                        intensity = max(1, min(100, intensity))
+                        console.hold.start(position, pro, intensity)
+                        return self._json({"ok": True})
+                    if self.path == "/api/hold/stop":
+                        console.hold.stop()
+                        return self._json({"ok": True})
+                    if self.path == "/api/lab":
+                        console.lab.set_state(data)
+                        return self._json({"ok": True})
+                    if self.path == "/api/lab/action":
+                        console.lab.action(str(data.get("action")),
+                                           data.get("value"))
+                        return self._json({"ok": True})
+                    return self._json({"error": "not found"}, 404)
+                except (TypeError, ValueError) as exc:
+                    return self._json({"error": str(exc)}, 400)
+
+        self.httpd = ThreadingHTTPServer(
+            (self.cfg.web_host, self.cfg.web_port), Handler)
+        thread = threading.Thread(target=self.httpd.serve_forever,
+                                  daemon=True)
+        thread.start()
+        # 0.0.0.0 is a bind address, not an address a browser can open;
+        # name the reachable ones instead.
+        if self.cfg.web_host in ("0.0.0.0", ""):
+            where = ("http://localhost:%d on this PC; on the LAN use this "
+                     "PC's IP address" % self.cfg.web_port)
+        else:
+            where = "http://%s:%d" % (self.cfg.web_host, self.cfg.web_port)
+        self.log("[web] console at %s (no authentication)" % where)
+        return self
+
+    def stop(self):
+        self.hold.close()
+        self.lab.close()
+        if self.httpd is not None:
+            self.httpd.shutdown()
+            self.httpd.server_close()
+            self.httpd = None
