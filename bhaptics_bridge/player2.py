@@ -18,13 +18,6 @@ The package's API is async; the bridge is not. A private asyncio
 loop runs on a daemon thread and play calls are scheduled onto it
 fire-and-forget, mirroring the SDK1 client's behaviour.
 
-Credentials: cfg.sdk2_app_id / cfg.sdk2_api_key, overridden by the
-BHAPTICS_APP_ID / BHAPTICS_API_KEY environment variables. They are
-sent only to Player on localhost during initialization and are
-never logged. Empty values are allowed - whether Player accepts
-them for dot playback is an open experiment; the init result is
-reported as-is.
-
 Durations: the SDK2 docs recommend >= 100 ms per play_dot call, so
 frame durations are floored at 100 ms. Effect frames are re-issued
 at 20 Hz by the engine, which keeps sustained effects continuous.
@@ -33,7 +26,6 @@ at 20 Hz by the engine, which keeps sustained effects continuous.
 import asyncio
 import inspect
 import json
-import os
 import threading
 import time
 
@@ -58,9 +50,9 @@ class _Sdk2Backend:
         import bhaptics_python as bp
         self.bp = bp
 
-    async def initialize(self, app_id, api_key):
+    async def initialize(self):
         return await _maybe_await(
-            self.bp.registry_and_initialize(app_id, api_key, ""))
+            self.bp.registry_and_initialize("", "", ""))
 
     async def is_connected(self):
         return await _maybe_await(self.bp.is_connected())
@@ -128,8 +120,6 @@ class BhapticsPlayer2:
         self.cfg = cfg
         self.dry_run = dry_run
         self.log = log
-        self.app_id = os.environ.get("BHAPTICS_APP_ID", cfg.sdk2_app_id)
-        self.api_key = os.environ.get("BHAPTICS_API_KEY", cfg.sdk2_api_key)
         self._backend = backend
         self._backend_failed = False
         self._loop = None
@@ -193,8 +183,7 @@ class BhapticsPlayer2:
         if backend is None:
             return False
         try:
-            ok = self._run(backend.initialize(self.app_id, self.api_key),
-                           timeout=25)
+            ok = self._run(backend.initialize(), timeout=25)
         except Exception as exc:  # init failure is data, not a crash
             self.log("[player2] SDK2 initialize failed: %s" % exc)
             return False
@@ -204,7 +193,7 @@ class BhapticsPlayer2:
             self._fetch_devices()
         else:
             self.log("[player2] SDK2 initialize was refused "
-                     "(Player running? credentials accepted?)")
+                     "(Player running?)")
         return self._connected
 
     def poll(self):

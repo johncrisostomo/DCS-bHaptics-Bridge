@@ -4,20 +4,14 @@
 Run this on the machine where bHaptics Player runs, with Player open.
 It answers, in order:
 
-  1. Does the SDK2 stack work with NO portal credentials at all?
-     (BHAPTICS_APP_ID / BHAPTICS_API_KEY left empty)
+  1. Does the SDK2 stack work with empty application identifiers,
+     the way the bridge initializes it?
   2. Does play_dot reach the suit - i.e. can effects stay code-defined
      via direct motor control, without portal-deployed events?
   3. What does the device info report, and does it change when the
      vest is switched off and on? (--listen)
   4. What does Player push, unsolicited, on the raw v4 websocket?
      (--raw)
-
-Credentials come from the environment only - never from arguments
-(they would land in shell history) and never from a file in this repo:
-
-    set BHAPTICS_APP_ID=...        (Windows cmd; may be left empty)
-    set BHAPTICS_API_KEY=...
 
 Modes:
     python tools\\probe_sdk2.py --lib [--listen 30] [--no-dot]
@@ -28,9 +22,9 @@ Modes:
         (the device info list and the direct is-connected query)
         once a second while you toggle the vest.
     python tools\\probe_sdk2.py --raw [--seconds 25]
-        Connect a plain websocket to the SDK2 endpoint with the same
-        env credentials and print every message Player sends. Sends
-        nothing beyond the handshake.
+        Connect a plain websocket to the SDK2 endpoint with empty
+        application identifiers and print every message Player
+        sends. Sends nothing beyond the handshake.
 """
 
 import argparse
@@ -56,11 +50,6 @@ async def _call(fn, *args):
     return result
 
 
-def _creds():
-    return (os.environ.get("BHAPTICS_APP_ID", ""),
-            os.environ.get("BHAPTICS_API_KEY", ""))
-
-
 def lib_mode(args):
     try:
         import bhaptics_python as bp
@@ -68,16 +57,13 @@ def lib_mode(args):
         print("bhaptics_python is not installed in this Python.")
         print("Install it with:  pip install bhaptics-python")
         return 2
-    app_id, api_key = _creds()
-    print("app_id: %r   api_key: %s" % (
-        app_id, "(set, %d chars)" % len(api_key) if api_key else "(empty)"))
 
     async def main():
         print("is_bhaptics_player_running ->",
               await _call(bp.is_bhaptics_player_running))
         try:
             ok = await asyncio.wait_for(
-                _call(bp.registry_and_initialize, app_id, api_key, ""), 25)
+                _call(bp.registry_and_initialize, "", "", ""), 25)
         except asyncio.TimeoutError:
             print("registry_and_initialize TIMED OUT after 25 s")
             return
@@ -118,13 +104,6 @@ def lib_mode(args):
                 print("  [t+%4.1fs] is_connected_query=%r device_info=%s"
                       % (elapsed, query, info))
                 await asyncio.sleep(1)
-        try:
-            messages = await _call(bp.get_haptic_messages,
-                                   app_id, api_key, "0.2.2")
-            text = str(messages)
-            print("get_haptic_messages ->", text[:2000])
-        except Exception as exc:  # exploratory: the error is data too
-            print("get_haptic_messages raised:", repr(exc))
         await _call(bp.close)
 
     asyncio.run(main())
@@ -132,15 +111,13 @@ def lib_mode(args):
 
 
 def raw_mode(args):
-    app_id, api_key = _creds()
     query = urllib.parse.urlencode({
-        "workspace_id": app_id,
-        "api_key": api_key,
+        "workspace_id": "",
+        "api_key": "",
         "version": args.version,
     })
     path = "/v4/feedback?" + query
-    shown = path.replace(api_key, "***") if api_key else path
-    print("connecting: ws://%s:%d%s" % (PLAYER_HOST, PLAYER_PORT, shown))
+    print("connecting: ws://%s:%d%s" % (PLAYER_HOST, PLAYER_PORT, path))
     ws = WebSocketClient(PLAYER_HOST, PLAYER_PORT, path)
     try:
         ws.connect(timeout=5.0)

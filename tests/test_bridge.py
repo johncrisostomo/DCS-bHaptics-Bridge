@@ -427,8 +427,8 @@ class _FakeBackend:
         self.stopped = False
         self.closed = False
 
-    async def initialize(self, app_id, api_key):
-        self.init_calls.append((app_id, api_key))
+    async def initialize(self):
+        self.init_calls.append(True)
         return self.init_result
 
     async def is_connected(self):
@@ -469,10 +469,9 @@ class Player2Tests(unittest.TestCase):
 
     def test_frame_maps_to_32_values(self):
         backend = _FakeBackend()
-        player = self.make_player(backend, sdk2_app_id="app",
-                                  sdk2_api_key="key")
+        player = self.make_player(backend)
         self.assertTrue(player.ensure_connected())
-        self.assertEqual(backend.init_calls, [("app", "key")])
+        self.assertEqual(backend.init_calls, [True])
 
         player.submit(Frame("g", FRONT, {0: 80, 15: 40}, 60))
         player.submit(Frame("g", BACK, {0: 60}, 200))
