@@ -15,11 +15,12 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
 
+from bhaptics_bridge import pro_map
 from bhaptics_bridge.config import Config
 from bhaptics_bridge.effects import EffectEngine
-from bhaptics_bridge.layout import VestLayout, FRONT, BACK
+from bhaptics_bridge.layout import ProLayout, FRONT, BACK, absolute
 from bhaptics_bridge.player import BhapticsPlayer
-from bhaptics_bridge.web import WebConsole, load_pro_mapping
+from bhaptics_bridge.web import WebConsole
 from bhaptics_bridge.telemetry import Telemetry, parse_packet
 
 import mock_player
@@ -68,9 +69,49 @@ class ParserTests(unittest.TestCase):
         self.assertIsNone(parse_packet(b""))
 
 
+class LayoutTests(unittest.TestCase):
+    def test_pro_regions_match_official_diagram(self):
+        layout = ProLayout()
+        # Per-side indices are row-major, row 0 at the top.
+        self.assertEqual(layout.rows([0]), [0, 1, 2, 3])
+        self.assertEqual(layout.rows([3]), [12, 13, 14, 15])
+        self.assertEqual(layout.chest(), list(range(0, 8)))
+        self.assertEqual(layout.lower(), list(range(8, 16)))
+        # Official absolute numbering: front 0-15, back 16-31.
+        self.assertEqual(absolute(FRONT, 15), 15)
+        self.assertEqual(absolute(BACK, 0), 16)
+        self.assertEqual(absolute(BACK, 15), 31)
+
+    def test_seed_mapping_covers_every_pro_motor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mapping = pro_map.load_mapping(root=tmp)
+        for position in (FRONT, BACK):
+            self.assertEqual(set(mapping[position]), set(range(16)))
+            for grids in mapping[position].values():
+                self.assertTrue(grids)
+                self.assertTrue(all(0 <= g < 20 for g in grids))
+
+    def test_translate_merges_shared_grid_points(self):
+        mapping = {FRONT: {0: [0], 1: [0]}, BACK: {}}
+        out = pro_map.translate(mapping, FRONT, {0: 30, 1: 80})
+        self.assertEqual(out, {0: 80})
+        # Zero intensities survive translation (stop frames rely on it).
+        out = pro_map.translate(mapping, FRONT, {0: 0, 1: 0})
+        self.assertEqual(out, {0: 0})
+
+    def test_measured_mapping_overrides_seed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "pro_mapping.json"), "w") as fh:
+                json.dump({"front": {"0": [19]}, "back": {}}, fh)
+            mapping = pro_map.load_mapping(root=tmp)
+        self.assertEqual(mapping[FRONT][0], [19])
+        self.assertEqual(mapping[FRONT][1], [1])  # seed kept
+        self.assertEqual(set(mapping[BACK]), set(range(16)))
+
+
 class EngineTests(unittest.TestCase):
     def setUp(self):
-        self.engine = EffectEngine(Config(), VestLayout())
+        self.engine = EffectEngine(Config(), ProLayout())
         self.engine.start_session(0.0)
         # Drain the suit-check pattern.
         t = 0.0
@@ -96,7 +137,7 @@ class EngineTests(unittest.TestCase):
 
     def test_touchdown_scales_with_sink_rate(self):
         def land(vv):
-            engine = EffectEngine(Config(), VestLayout())
+            engine = EffectEngine(Config(), ProLayout())
             engine.start_session(0.0)
             t = 0.0
             ground = make_tel(wow1=1, wow4=1, wow6=1)
@@ -143,14 +184,14 @@ class EngineTests(unittest.TestCase):
         # Ordinary maneuvering below onset: silent.
         frames = self.feed(make_tel(gy=1.5, **base))
         self.assertFalse(frames_with(frames, "g"))
-        # Moderate pull: lower rows only (indices 12-19).
+        # Moderate pull: lower rows only (per-side indices 8-15).
         idx = g_indices(3.0)
         self.assertTrue(idx)
-        self.assertTrue(all(i >= 12 for i in idx))
+        self.assertTrue(all(i >= 8 for i in idx))
         # Hard pull: the shoulders (row 0, indices 0-3) have joined.
         idx = g_indices(5.5)
         self.assertTrue(any(i < 4 for i in idx))
-        self.assertTrue(any(i >= 12 for i in idx))
+        self.assertTrue(any(i >= 8 for i in idx))
 
     def test_damage_pattern(self):
         base = dict(wow1=0, wow4=0, wow6=0, agl=500)
@@ -191,7 +232,7 @@ class PlayerIntegrationTests(unittest.TestCase):
             cfg = Config({"player_port": port})
             player = BhapticsPlayer(cfg)
             self.assertTrue(player.ensure_connected())
-            engine = EffectEngine(cfg, VestLayout())
+            engine = EffectEngine(cfg, ProLayout())
             now = time.monotonic()
             engine.start_session(now)
             dummy = make_tel(wow1=1, wow4=1, wow6=1)
@@ -265,15 +306,6 @@ class WebTests(unittest.TestCase):
         console = WebConsole(cfg, stub, log=lambda *a: None)
         self.addCleanup(console.stop)
         return console, stub
-
-    def test_pro_mapping_seed(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            mapping, source = load_pro_mapping(root=tmp)
-        self.assertEqual(source, "seed")
-        self.assertEqual(mapping[FRONT][0], [0])
-        self.assertEqual(mapping[FRONT][12], [12, 16])  # bottom row doubles
-        self.assertEqual(mapping[BACK][15], [15, 19])
-        self.assertEqual(set(mapping[FRONT]), set(range(16)))
 
     def test_hold_submits_and_zeroes(self):
         console, stub = self.make_console()

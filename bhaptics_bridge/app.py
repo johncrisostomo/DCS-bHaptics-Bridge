@@ -7,7 +7,7 @@ import time
 
 from .config import load_config
 from .effects import EffectEngine
-from .layout import VestLayout
+from .layout import ProLayout
 from .player import BhapticsPlayer
 from .telemetry import TelemetryReceiver, parse_packet
 from .web import WebConsole
@@ -29,7 +29,7 @@ def _submit_all(player, frames, lock=None):
 def run_test(cfg, dry_run):
     """Fire the suit check once, without DCS. For bench testing."""
     player = BhapticsPlayer(cfg, dry_run=dry_run)
-    engine = EffectEngine(cfg, VestLayout(cfg.flip_vertical))
+    engine = EffectEngine(cfg, ProLayout())
     dummy = parse_packet(
         b"DBB1;ac=1;name=SUIT_CHECK;gy=1.0;gear=1.0;wow1=1;wow4=1;wow6=1;tas=0"
     )
@@ -56,7 +56,7 @@ def run_test(cfg, dry_run):
 def run(cfg, dry_run, web=False):
     player = BhapticsPlayer(cfg, dry_run=dry_run)
     receiver = TelemetryReceiver(cfg)
-    engine = EffectEngine(cfg, VestLayout(cfg.flip_vertical))
+    engine = EffectEngine(cfg, ProLayout())
 
     print("DCS bHaptics Bridge")
     print("  telemetry: udp %s:%d" % (cfg.udp_host, cfg.udp_port))
