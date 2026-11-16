@@ -17,9 +17,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from bhaptics_bridge import pro_map
 from bhaptics_bridge.config import Config
-from bhaptics_bridge.effects import EffectEngine
+from bhaptics_bridge.effects import EffectEngine, Frame
 from bhaptics_bridge.layout import ProLayout, FRONT, BACK, absolute
 from bhaptics_bridge.player import BhapticsPlayer
+from bhaptics_bridge.player2 import (BhapticsPlayer2, parse_device_info,
+                                    vest_status)
 from bhaptics_bridge.web import WebConsole
 from bhaptics_bridge.telemetry import Telemetry, parse_packet
 
@@ -267,7 +269,7 @@ class _StubPlayer:
         self.dot_calls = []   # (key, position, points, duration_ms)
         self.frames = []      # effect frames via submit()
 
-    def submit_dot(self, key, position, points, duration_ms):
+    def submit_pro_dot(self, key, position, points, duration_ms):
         self.dot_calls.append((key, position, dict(points), duration_ms))
         return True
 
@@ -350,6 +352,25 @@ class WebTests(unittest.TestCase):
         self.assertTrue(status["player_connected"])
         self.assertGreaterEqual(lazy.ensure_calls, 1)
 
+    def test_status_vest_only_when_player_reports_it(self):
+        console, stub = self.make_console()
+        self.assertIsNone(console.status()["vest"])
+
+        class VestStub(_StubPlayer):
+            mapping_source = "direct (SDK2)"
+
+            def device_status(self):
+                return {"connected": True, "paired": True, "battery": 82}
+
+        cfg = Config({"web_host": "127.0.0.1", "web_port": 0})
+        console2 = WebConsole(cfg, VestStub(), log=lambda *a: None)
+        self.addCleanup(console2.stop)
+        vest = console2.status()["vest"]
+        self.assertEqual(vest["battery"], 82)
+        self.assertTrue(vest["connected"])
+        self.assertEqual(console2.status()["mapping_source"],
+                         "direct (SDK2)")
+
     def test_http_endpoints(self):
         console, stub = self.make_console()
         console.start()
@@ -377,6 +398,122 @@ class WebTests(unittest.TestCase):
         with urllib.request.urlopen(req, timeout=5) as resp:
             self.assertEqual(json.loads(resp.read()), {"ok": True})
         self.assertEqual(console.hold.describe()["motor"], 20)
+
+
+class _FakeBackend:
+    """Async stand-in for _Sdk2Backend: records every call."""
+
+    def __init__(self, init_result=True, device_info="[]"):
+        self.init_result = init_result
+        self.device_info = device_info
+        self.init_calls = []
+        self.dot_calls = []   # (duration_ms, values)
+        self.stopped = False
+        self.closed = False
+
+    async def initialize(self, app_id, api_key):
+        self.init_calls.append((app_id, api_key))
+        return self.init_result
+
+    async def is_connected(self):
+        return True
+
+    async def play_dot(self, duration_ms, values):
+        self.dot_calls.append((duration_ms, list(values)))
+        return 1
+
+    async def device_info_json(self):
+        return self.device_info
+
+    async def stop_all(self):
+        self.stopped = True
+
+    async def close(self):
+        self.closed = True
+
+
+def _wait_for(predicate, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+class Player2Tests(unittest.TestCase):
+    def make_player(self, backend, **cfg_values):
+        player = BhapticsPlayer2(Config(cfg_values),
+                                 log=lambda *a: None, backend=backend)
+        self.addCleanup(player.close)
+        return player
+
+    def test_frame_maps_to_32_values(self):
+        backend = _FakeBackend()
+        player = self.make_player(backend, sdk2_app_id="app",
+                                  sdk2_api_key="key")
+        self.assertTrue(player.ensure_connected())
+        self.assertEqual(backend.init_calls, [("app", "key")])
+
+        player.submit(Frame("g", FRONT, {0: 80, 15: 40}, 60))
+        player.submit(Frame("g", BACK, {0: 60}, 200))
+        self.assertTrue(_wait_for(lambda: len(backend.dot_calls) >= 2))
+        (dur1, values1), (dur2, values2) = backend.dot_calls[:2]
+        self.assertEqual(len(values1), 32)
+        self.assertEqual(values1[0], 80)    # front motor 0
+        self.assertEqual(values1[15], 40)   # front motor 15
+        self.assertEqual(sum(values1), 120)
+        self.assertEqual(dur1, 100)         # floored at the SDK2 minimum
+        self.assertEqual(values2[16], 60)   # back motor 0 -> absolute 16
+        self.assertEqual(sum(values2), 60)
+        self.assertEqual(dur2, 200)
+
+    def test_submit_pro_dot_is_direct(self):
+        backend = _FakeBackend()
+        player = self.make_player(backend)
+        player.submit_pro_dot("web-hold", BACK, {15: 70}, 150)
+        self.assertTrue(_wait_for(lambda: len(backend.dot_calls) >= 1))
+        _dur, values = backend.dot_calls[0]
+        self.assertEqual(values[31], 70)    # back motor 15 -> absolute 31
+        self.assertEqual(sum(values), 70)
+
+    def test_init_refused_means_no_playback(self):
+        backend = _FakeBackend(init_result=False)
+        player = self.make_player(backend)
+        self.assertFalse(player.ensure_connected())
+        self.assertFalse(player.connected)
+        self.assertFalse(player.submit(Frame("g", FRONT, {0: 50}, 100)))
+        time.sleep(0.1)
+        self.assertEqual(backend.dot_calls, [])
+
+    def test_device_status_parsing(self):
+        raw = json.dumps([
+            {"position": 3, "deviceName": "TactVisor",
+             "connected": True, "paired": True, "battery": 50},
+            {"position": 0, "deviceName": "TactSuit Pro",
+             "connected": True, "paired": True, "battery": 82},
+        ])
+        devices = parse_device_info(raw)
+        self.assertEqual(len(devices), 2)
+        self.assertEqual(vest_status(devices),
+                         {"connected": True, "paired": True,
+                          "battery": 82})
+        self.assertEqual(parse_device_info("not json"), [])
+        self.assertEqual(parse_device_info(None), [])
+        self.assertIsNone(vest_status([]))
+
+    def test_device_status_flows_from_backend(self):
+        raw = json.dumps([{"position": 0, "connected": False,
+                           "paired": True, "battery": 41}])
+        backend = _FakeBackend(device_info=raw)
+        player = self.make_player(backend)
+        self.assertIsNone(player.device_status())
+        self.assertTrue(player.ensure_connected())
+        self.assertTrue(
+            _wait_for(lambda: player.device_status() is not None))
+        status = player.device_status()
+        self.assertFalse(status["connected"])
+        self.assertEqual(status["battery"], 41)
 
 
 if __name__ == "__main__":

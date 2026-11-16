@@ -17,11 +17,30 @@ submission.
 """
 
 import json
+import os
+import tempfile
 import time
 import urllib.parse
 
 from . import pro_map
 from .wsclient import WebSocketClient, WebSocketError
+
+
+def load_mapping_with_source():
+    """The Pro -> grid mapping + where it came from.
+
+    Falls back to the seed if a measured pro_mapping.json exists but
+    cannot be parsed, rather than taking the bridge down.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    has_file = os.path.exists(os.path.join(root, "pro_mapping.json"))
+    try:
+        mapping = pro_map.load_mapping(root)
+    except (ValueError, TypeError, AttributeError, OSError):
+        with tempfile.TemporaryDirectory() as tmp:
+            mapping = pro_map.load_mapping(root=tmp)
+        return mapping, "seed (pro_mapping.json unreadable)"
+    return mapping, "pro_mapping.json" if has_file else "seed"
 
 
 class BhapticsPlayer:
@@ -31,7 +50,7 @@ class BhapticsPlayer:
         self.log = log
         self.ws = None
         self._next_retry = 0.0
-        self.mapping = pro_map.load_mapping()
+        self.mapping, self.mapping_source = load_mapping_with_source()
 
     @property
     def connected(self):
@@ -107,6 +126,17 @@ class BhapticsPlayer:
         grid_points = pro_map.translate(self.mapping, frame.position, frame.points)
         return self.submit_dot(frame.key, frame.position, grid_points,
                                frame.duration_ms)
+
+    def submit_pro_dot(self, key, position, pro_points, duration_ms):
+        """Submit raw points given in TactSuit Pro motor space.
+
+        The single Pro-space entry point for callers that hold Pro
+        motor indices (the web console's motor test): translation to
+        the SDK1 grid happens here, with the effect frames, so no
+        caller re-implements it.
+        """
+        grid_points = pro_map.translate(self.mapping, position, pro_points)
+        return self.submit_dot(key, position, grid_points, duration_ms)
 
     def turn_off_all(self, keys_positions):
         for key, position in keys_positions:

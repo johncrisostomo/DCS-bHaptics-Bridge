@@ -6,7 +6,42 @@ sends flight data to the companion over UDP on localhost. The companion
 converts the data into effects and sends motor commands to bHaptics
 Player over a websocket.
 
-Source only: no compiled binaries, no installer, no accounts, no API keys.
+Source only: no installer, and nothing compiled is shipped. The
+default (SDK1) transport also needs no accounts and no API keys.
+
+## This branch: the v2 (SDK2) track
+
+This branch is the parallel v2 track. `main` carries the released
+v0.3.0 (SDK1) line and is unchanged; here, the Player transport is
+selectable in `config.ini`:
+
+```
+transport = sdk1   ; default - the built-in client, exactly as released
+transport = sdk2   ; the official SDK2 package (this track's work)
+```
+
+What SDK2 changes, practically:
+
+- **Setup:** needs `pip install bhaptics-python` - the project's
+  only third-party dependency, isolated in
+  `bhaptics_bridge/player2.py` - and, if Player enforces it,
+  credentials from a haptic app registered in the bHaptics
+  Developer Portal (`sdk2_app_id` / `sdk2_api_key` in `config.ini`,
+  which is gitignored; the API key is a secret and is never logged).
+  Whether empty credentials work is an open experiment; see
+  `docs/v2-plan.md`.
+- **Motors:** addressed directly (one intensity per real motor).
+  The SDK1 grid translation (`pro_map.py`, the seed table,
+  calibration) does not apply on this transport.
+- **Web console:** gains a Vest pill with the vest's own connection
+  state and battery level, which SDK1 cannot report.
+- **Behaviour notes:** `play_dot` durations are floored at 100 ms
+  (the vendor's recommended minimum); the package maintains the
+  Player connection itself and prints its own connection log lines.
+- **Status:** implemented and unit-tested (23 tests, mock backend).
+  Not yet verified on real hardware - that check is milestone M4 in
+  `docs/v2-plan.md`, and until it passes, v0.3.0 on `main` remains
+  the verified release.
 
 ## Scope
 
@@ -38,7 +73,9 @@ DCS World --(Lua export script, UDP 127.0.0.1:41231)--> Python companion --(WebS
 - Windows 10 or later
 - DCS World (Steam or standalone)
 - bHaptics Player, with a TactSuit Pro connected
-- Python 3.10 or later, standard library only
+- Python 3.10 or later. Standard library only for the SDK1
+  transport; the SDK2 transport additionally needs
+  `bhaptics-python` (supports Python 3.8-3.12)
 
 ## Install
 

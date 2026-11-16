@@ -9,11 +9,19 @@ from .config import load_config
 from .effects import EffectEngine
 from .layout import ProLayout
 from .player import BhapticsPlayer
+from .player2 import BhapticsPlayer2
 from .telemetry import TelemetryReceiver, parse_packet
 from .web import WebConsole
 
 TICK = 0.05           # 20 Hz main loop
 SESSION_TIMEOUT = 1.5  # seconds without an aircraft before the session ends
+
+
+def make_player(cfg, dry_run):
+    """The configured Player transport (config key: transport)."""
+    if getattr(cfg, "transport", "sdk1") == "sdk2":
+        return BhapticsPlayer2(cfg, dry_run=dry_run)
+    return BhapticsPlayer(cfg, dry_run=dry_run)
 
 
 def _submit_all(player, frames, lock=None):
@@ -28,7 +36,7 @@ def _submit_all(player, frames, lock=None):
 
 def run_test(cfg, dry_run):
     """Fire the suit check once, without DCS. For bench testing."""
-    player = BhapticsPlayer(cfg, dry_run=dry_run)
+    player = make_player(cfg, dry_run)
     engine = EffectEngine(cfg, ProLayout())
     dummy = parse_packet(
         b"DBB1;ac=1;name=SUIT_CHECK;gy=1.0;gear=1.0;wow1=1;wow4=1;wow6=1;tas=0"
@@ -54,14 +62,15 @@ def run_test(cfg, dry_run):
 
 
 def run(cfg, dry_run, web=False):
-    player = BhapticsPlayer(cfg, dry_run=dry_run)
+    player = make_player(cfg, dry_run)
     receiver = TelemetryReceiver(cfg)
     engine = EffectEngine(cfg, ProLayout())
 
     print("DCS bHaptics Bridge")
     print("  telemetry: udp %s:%d" % (cfg.udp_host, cfg.udp_port))
-    print("  player:    ws %s:%d (%s)" % (cfg.player_host, cfg.player_port,
-                                          "dry-run" if dry_run else cfg.app_name))
+    print("  player:    %s (%s)" % (
+        getattr(cfg, "transport", "sdk1"),
+        "dry-run" if dry_run else cfg.app_name))
 
     console = None
     submit_lock = None
