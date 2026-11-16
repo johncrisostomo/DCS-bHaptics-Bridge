@@ -154,7 +154,8 @@ Vest pill. Two setup notes:
 older websocket protocol directly - standard library only, no
 package, no account, no credentials. Its limits are why SDK2 is
 the default: motors are addressed through a 20-point grid that
-must be translated to the Pro's motors (see Notes), and the
+must be translated to the Pro's motors (see
+`bhaptics_bridge/pro_map.py`), and the
 protocol reports no device state. Set `transport = sdk1` to use
 it; it is the transport the v0.3.0 release shipped with, kept as a
 fallback. That release is also the standing no-dependency
@@ -214,33 +215,6 @@ optional. Available settings: the Player transport and SDK2
 credentials (see Transport), master intensity scale, per-effect
 switches, stall AoA threshold, G onset and full-scale values, and
 UDP, Player, and web console ports.
-
-## Notes
-
-- Player protocols: the default transport uses bHaptics' SDK2
-  through the official `bhaptics-python` package (isolated in
-  `bhaptics_bridge/player2.py`; it is the only place the package is
-  imported). The legacy transport speaks the SDK1 websocket
-  interface, `ws://127.0.0.1:15881/v2/feedbacks`, with PascalCase
-  JSON field names matching observed SDK1 client traffic; it was
-  confirmed working against bHaptics Player on 2026-11-16.
-- Motor layout: the TactSuit Pro has 32 motors, 16 per side in a 4x4
-  grid. Effects are defined directly on those motors, numbered as in
-  bHaptics' Motor Index page: front 0-15, back 16-31, row-major from
-  the top-left of each side.
-- Grid translation (SDK1 transport only): the SDK1 vest grid has 20
-  points per side, so the bridge translates Pro motors to grid
-  points (`bhaptics_bridge/pro_map.py`). How Player maps the grid
-  onto the Pro is not published, so the built-in table is an
-  assumption and is marked as a seed in the code. Run
-  `python tools\calibrate_pro.py` once to measure the mapping on
-  your own suit; it writes `pro_mapping.json`, which the bridge
-  then loads automatically. The SDK2 transport needs none of this.
-- DCS provides no export signal for ejection. There is no ejection effect.
-- Multiplayer: the export script is installed in Saved Games and does not
-  modify DCS install files. Servers can restrict which export data is
-  available, and servers running pure scripts may reject clients with
-  script mods.
 
 ## Uninstall
 
