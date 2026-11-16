@@ -421,6 +421,7 @@ class _FakeBackend:
         self.init_result = init_result
         self.device_info = device_info
         self.vest_connected = vest_connected
+        self.connected_query = True
         self.init_calls = []
         self.dot_calls = []   # (duration_ms, values)
         self.stopped = False
@@ -431,7 +432,7 @@ class _FakeBackend:
         return self.init_result
 
     async def is_connected(self):
-        return True
+        return self.connected_query
 
     async def is_device_connected(self, position):
         return self.vest_connected
@@ -531,24 +532,49 @@ class Player2Tests(unittest.TestCase):
         self.assertTrue(_wait_for(
             lambda: player.device_status()["battery"] == 41))
         status = player.device_status()
-        # The direct is-connected query wins for the connected
-        # flag (the fake's boolean defaults to True); the device
-        # info supplies the battery.
-        self.assertTrue(status["connected"])
+        # The device-info entry is the primary source: its flag
+        # (False here) stands even though the fake's direct query
+        # defaults to True.
+        self.assertFalse(status["connected"])
         self.assertEqual(status["battery"], 41)
 
-    def test_stale_device_info_does_not_mask_power_off(self):
-        # Regression: Player's device list can keep the vest
-        # marked connected after power-off. The direct query
-        # says otherwise, and it must win.
+    def test_device_info_entry_is_primary(self):
+        # A 45 s probe polling both SDK sources once a second
+        # (2026-11-16) showed them agreeing at every step; where
+        # they differ, the entry rules - it is also the only
+        # source carrying battery and pairing.
         raw = json.dumps([{"position": 0, "connected": True,
                            "paired": True, "battery": 88}])
         backend = _FakeBackend(device_info=raw, vest_connected=False)
         player = self.make_player(backend)
         self.assertTrue(player.ensure_connected())
         self.assertTrue(_wait_for(
-            lambda: player.device_status()["connected"] is False))
+            lambda: player.device_status()["connected"] is True))
         self.assertEqual(player.device_status()["battery"], 88)
+
+    def test_fetch_never_tears_down_the_session(self):
+        # Regression for the frozen status: the fetch once let a
+        # queried liveness answer clear the session flag, which
+        # stopped polling and made the next submit re-initialise
+        # the SDK (resetting its device tracking). Even with the
+        # liveness query answering False throughout, the session
+        # must stand, init must run exactly once, and the device
+        # list must populate.
+        raw = json.dumps([{"position": 0, "connected": True,
+                           "paired": True, "battery": 82}])
+        backend = _FakeBackend(device_info=raw)
+        backend.connected_query = False
+        player = self.make_player(backend)
+        self.assertTrue(player.ensure_connected())
+        self.assertTrue(_wait_for(
+            lambda: player.device_status()["battery"] == 82))
+        for _ in range(5):
+            player._devices_at = 0.0   # make every poll due a fetch
+            player.poll()
+            self.assertTrue(player.ensure_connected())
+        self.assertEqual(len(backend.init_calls), 1)
+        self.assertTrue(player.connected)
+        self.assertTrue(player.device_status()["connected"])
 
     def test_device_status_falls_back_to_is_connected(self):
         backend = _FakeBackend(device_info="[]", vest_connected=True)

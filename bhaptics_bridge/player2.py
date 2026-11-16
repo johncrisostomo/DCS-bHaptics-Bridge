@@ -221,11 +221,14 @@ class BhapticsPlayer2:
         async def fetch():
             try:
                 try:
-                    # The SDK maintains the Player connection itself
-                    # (it auto-reconnects), so liveness is queried,
-                    # not assumed.
-                    self._connected = bool(
-                        await self._backend.is_connected())
+                    # Fetch only. Session state is deliberately NOT
+                    # re-derived here: initialization is one-shot (the
+                    # SDK auto-reconnects underneath it), and letting
+                    # a queried liveness answer clear the session flag
+                    # wedged status polling in practice - one False
+                    # stopped every later fetch, and the re-init that
+                    # followed reset the SDK's device tracking, whose
+                    # list then needs seconds to repopulate.
                     raw = await self._backend.device_info_json()
                     self._devices = parse_device_info(raw)
                 except Exception as exc:
@@ -274,24 +277,25 @@ class BhapticsPlayer2:
         """Latest known vest state.
 
         Always a dict on this transport (None only in dry-run,
-        where there is no Player to report anything). "connected"
-        comes from the SDK's direct is-connected query - the
-        purpose-built answer, refreshed every poll. The device
-        info list supplies battery and pairing, but its connected
-        flag is only a fallback for when the direct query has
-        never answered: a cached device list can keep a vest
-        marked connected after it has powered off, which is
-        exactly the state the direct query exists to correct.
+        where there is no Player to report anything). The device
+        info entry is the primary source: a 45-second probe that
+        polled both SDK sources once a second (2026-11-16) showed
+        the entry's connected flag and the direct is-connected
+        query agreeing at every step, through connect, drop and
+        reconnect - and the entry also carries battery and
+        pairing. The direct query answers only when no entry
+        exists yet: the list populates seconds after init, and an
+        absent entry with a silent query means "no report yet"
+        (connected None), never a guessed state.
         """
         if self.dry_run:
             return None
-        info = vest_status(self._devices) or {}
-        connected = self._vest_connected
-        if connected is None:
-            connected = info.get("connected")
-        return {"connected": connected,
-                "paired": info.get("paired"),
-                "battery": info.get("battery")}
+        info = vest_status(self._devices)
+        if info is not None:
+            return info
+        return {"connected": self._vest_connected,
+                "paired": None,
+                "battery": None}
 
     # -- submission -----------------------------------------------------
 
