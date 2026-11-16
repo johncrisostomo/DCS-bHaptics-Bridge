@@ -21,7 +21,7 @@ from .layout import FRONT, BACK
 
 Frame = namedtuple("Frame", ["key", "position", "points", "duration_ms"])
 
-_ALL_POINTS = list(range(20))
+_ALL_POINTS = list(range(16))  # TactSuit Pro motors per side
 
 
 class EffectEngine:
@@ -82,10 +82,10 @@ class EffectEngine:
         self.pattern = []
         layout = self.layout
         t = 0.0
-        for row in range(5):
+        for row in range(4):
             self._schedule(t, self._frame("check", FRONT, layout.rows([row]), 75, 140), now)
             t += 0.15
-        for row in range(5):
+        for row in range(4):
             self._schedule(t, self._frame("check", BACK, layout.rows([row]), 75, 140), now)
             t += 0.15
         self._schedule(t + 0.1, self._frame("check", FRONT, layout.all(), 60, 220), now)
@@ -115,9 +115,9 @@ class EffectEngine:
         layout = self.layout
 
         # Sustained: G load. Positive G starts low and climbs the vest as
-        # the pull builds: lower rows from g_onset, mid rows from ~45% of
-        # the range, chest/shoulders from ~72%. Ordinary maneuvering
-        # (below g_onset) stays silent. Negative G pulls high.
+        # the pull builds: the two lower rows from g_onset, row 1 from
+        # ~45% of the range, the shoulder row from ~72%. Ordinary
+        # maneuvering (below g_onset) stays silent. Negative G pulls high.
         if cfg.effect_g:
             frames = None
             if cur.gy >= cfg.g_onset:
@@ -127,11 +127,11 @@ class EffectEngine:
                 g_mid = cfg.g_onset + 0.45 * span
                 if cur.gy >= g_mid:
                     mid_i = 25 + 60 * min(1.0, (cur.gy - g_mid) / (cfg.g_full - g_mid))
-                    points.update({i: mid_i for i in layout.rows([2])})
+                    points.update({i: mid_i for i in layout.rows([1])})
                 g_high = cfg.g_onset + 0.72 * span
                 if cur.gy >= g_high:
                     high_i = 30 + 70 * min(1.0, (cur.gy - g_high) / (cfg.g_full - g_high))
-                    points.update({i: high_i for i in layout.rows([0, 1])})
+                    points.update({i: high_i for i in layout.rows([0])})
                 frames = [
                     self._frame_points("g", FRONT, points, 160),
                     self._frame_points("g", BACK, points, 160),
@@ -148,7 +148,7 @@ class EffectEngine:
         if cfg.effect_burner:
             frames = None
             if cur.ab1 > 0.5 or cur.ab2 > 0.5:
-                frames = [self._frame("ab", BACK, layout.rows([3, 4]),
+                frames = [self._frame("ab", BACK, layout.rows([2, 3]),
                                       38 + random.randint(-6, 6), 160)]
             out += self._sustain("ab", frames, now)
 
@@ -170,8 +170,8 @@ class EffectEngine:
         if cfg.effect_gun:
             frames = None
             if now - self.last_gun_time < 0.18:
-                gun_points = {i: 75 for i in layout.rows_cols([0, 1], [1, 2])}
-                gun_points.update({i: 40 for i in layout.rows_cols([2], [1, 2])})
+                gun_points = {i: 75 for i in layout.center([0])}
+                gun_points.update({i: 40 for i in layout.center([1])})
                 frames = [self._frame_points("gun", FRONT, gun_points, 110)]
             out += self._sustain("gun", frames, now, period=0.11)
 
@@ -206,8 +206,8 @@ class EffectEngine:
 
         # Weapon release: total station count dropped.
         if cfg.effect_release and prev is not None and cur.stn < prev.stn:
-            out.append(self._frame("release", FRONT, layout.rows([2, 3]), 90, 170))
-            out.append(self._frame("release", BACK, layout.rows([2, 3]), 90, 170))
+            out.append(self._frame("release", FRONT, layout.mid(), 90, 170))
+            out.append(self._frame("release", BACK, layout.mid(), 90, 170))
 
         # Countermeasures: chaff or flare count dropped.
         if (cfg.effect_cm and prev is not None
