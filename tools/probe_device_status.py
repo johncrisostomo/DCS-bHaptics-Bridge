@@ -8,15 +8,15 @@ no device status. bHaptics' current SDKs (SDK2) expose device status
 core connects to ws://127.0.0.1:15881/v4/feedback and receives
 "ServerDevices" messages describing each device (address, battery,
 connected, paired, position). That endpoint is documented as taking
-Developer Portal credentials (workspace_id, api_key).
+workspace parameters (workspace_id, api_key).
 
 This probe answers two empirical questions, sending nothing but the
 connection handshakes themselves:
 
 1. Does Player send anything (device status included) on the v2
    socket the bridge already uses?
-2. Does Player accept a v4 connection with empty credentials, and
-   does it push ServerDevices messages without an authenticated
+2. Does Player accept a v4 connection with empty workspace
+   parameters, and does it push ServerDevices messages to such a
    session?
 
 Run it with Player up, then turn the vest off and back on while it

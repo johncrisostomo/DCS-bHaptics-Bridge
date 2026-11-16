@@ -6,7 +6,10 @@ sends flight data to the companion over UDP on localhost. The companion
 converts the data into effects and sends motor commands to bHaptics
 Player over a websocket.
 
-Source only: no compiled binaries, no installer, no accounts, no API keys.
+Source only: no installer, and nothing compiled is shipped by this
+project. The companion talks to bHaptics Player through the official
+SDK2 package (see Transport, below); a legacy SDK1 transport is
+included and needs no package.
 
 ## Scope
 
@@ -38,7 +41,13 @@ DCS World --(Lua export script, UDP 127.0.0.1:41231)--> Python companion --(WebS
 - Windows 10 or later
 - DCS World (Steam or standalone)
 - bHaptics Player, with a TactSuit Pro connected
-- Python 3.10 or later, standard library only
+- Python 3.10 or later - with one limit: the SDK2 package ships
+  wheels for Python 3.8-3.13, so on Python 3.14+ it cannot be
+  installed. Python 3.12 is the verified combination; if your
+  default Python is newer, install 3.12 alongside it and run the
+  bridge with `py -3.12` (Windows) - the SDK1 transport and the
+  rest of your system are unaffected. The legacy SDK1 transport
+  needs only the standard library, on any Python 3.10+
 
 ## Install
 
@@ -65,7 +74,28 @@ DCS World --(Lua export script, UDP 127.0.0.1:41231)--> Python companion --(WebS
 
 ### Python side
 
-No installation. Keep the folder anywhere.
+Keep the folder anywhere. For the default SDK2 transport, install
+the one dependency:
+
+```
+pip install -r requirements.txt
+```
+
+On Python 3.14 or newer that fails with "No matching distribution
+found" (see Requirements); use the Python 3.12 interpreter instead:
+
+```
+py -3.12 -m pip install -r requirements.txt
+py -3.12 -m bhaptics_bridge --test
+```
+
+(Only the legacy SDK1 transport skips this step.)
+
+**No-dependency alternative:** release **v0.3.1** is the frozen
+SDK1 build - standard library only, nothing to install. If you
+want that version, download it from the
+[releases page](https://github.com/johncrisostomo/DCS-bHaptics-Bridge/releases/tag/v0.3.1)
+instead of using this branch.
 
 ## Run
 
@@ -90,22 +120,62 @@ To stop, close the console window or press `Ctrl+C`.
   (takeoff, gear cycle, G pull, weapon release, gun burst, damage,
   touchdown) to the bridge without DCS.
 
+## Transport
+
+The bridge reaches bHaptics Player through one of two transports,
+chosen by `transport` in `config.ini`. Everything above the
+transport - the Lua script, telemetry, effects, web console - is
+identical either way.
+
+**SDK2 (default).** The official `bhaptics-python` package speaks
+to Player's current protocol. Motors are addressed directly, one
+intensity per real motor (front 0-15, back 16-31), and Player
+reports device state back, which is what powers the web console's
+Vest pill. Two setup notes:
+
+- Behaviour: `play_dot` durations are floored at 100 ms (the
+  vendor's recommended minimum), and the package maintains the
+  Player connection itself, printing its own connection log lines.
+- Status: SDK2 reports the vest itself. The bridge logs the
+  vest's state when it changes (`[player2] vest: connected
+  (battery 82%)`), and the web console shows it in its Vest pill -
+  connected / not connected, with battery level when Player
+  reports one. One limit, in Player's reporting rather than the
+  bridge: the report is event-driven, and switching the vest off
+  does not reliably produce an update, so the pill can keep
+  showing the last reported state after a power-off. Connects
+  and reconnects are reported.
+
+**SDK1 (legacy).** The bridge's built-in client speaks Player's
+older websocket protocol directly - standard library only, no
+package. Its limits are why SDK2 is
+the default: motors are addressed through a 20-point grid that
+must be translated to the Pro's motors (see
+`bhaptics_bridge/pro_map.py`), and the
+protocol reports no device state. Set `transport = sdk1` to use
+it; it is the transport the v0.3.1 release shipped with, kept as a
+fallback. That release is also the standing no-dependency
+version: if you want the bridge with nothing to install, check
+out
+[v0.3.1](https://github.com/johncrisostomo/DCS-bHaptics-Bridge/releases/tag/v0.3.1)
+instead - it is frozen and receives no new features.
+
 ## Web console
 
 `python -m bhaptics_bridge --web` also serves a web page on the local
 network, at `http://<this PC's address>:41232` (port and bind address
 are `web_host` / `web_port` in the config). It has three parts:
 
-- **Status.** Whether the bridge is connected to bHaptics Player. The
-  protocol cannot report whether the vest itself is powered and
-  paired; that is shown in Player's own window.
+- **Status.** Whether the bridge is connected to bHaptics Player,
+  and - on the default SDK2 transport - whether the vest itself is
+  connected, with its battery level. (The SDK1 protocol cannot
+  report vest state; there it is shown in Player's own window.)
 - **Motor test.** The TactSuit Pro drawn front and back as a vest
   outline, motors positioned where they sit on the body and numbered
   with the official motor index (front in mirror view, as in the
   bHaptics diagram; the wearer's left and right are labelled).
   Pressing and holding a motor vibrates it until released, through
-  the same Pro-to-grid translation the effects use (seed table, or
-  `pro_mapping.json` when present).
+  the same submission path the effect frames use.
 - **Effect lab.** The effect engine fed with synthetic telemetry, so
   every effect — G load, afterburner, stall, gear, touchdown, weapon
   release, gun, countermeasures, damage, taxi — can be tested without
@@ -121,10 +191,10 @@ drive the suit. Trusted networks only.
 | Effect | Trigger | Motors |
 |---|---|---|
 | Suit check | First aircraft entry | Front rows top to bottom, then back rows |
-| Positive G | Load factor at or above `g_onset` (default 2.0) | Front and back; lower rows first, higher rows added as load increases |
-| Negative G | Load factor at or below 0.2 | Chest and shoulders, front and back |
-| Afterburner | Afterburner lit (draw arguments 28/29) | Lower back rows |
-| Stall buffet | Angle of attack at or above threshold (default 0.30 rad), airborne | All motors, random low intensity |
+| Positive G | Load factor above `g_onset` (default 1.2); 1 G is the silent neutral point | Front and back; the squeeze grows continuously with load, starting in the lower rows and climbing |
+| Negative G | Load factor below `neg_g_onset` (default 0.85) | Chest, front and back; builds continuously as the load drops, full at about −1 G |
+| Afterburner | Afterburner stage above zero (draw arguments 28/29) | Lower back rows; rumble grows with the stage |
+| Stall buffet | Angle of attack at or above threshold (default 0.30 rad), airborne | All motors, random intensity that deepens past the threshold |
 | Gear transit | Gear position between up and down | Lower rows, alternating front and back |
 | Gear locked | Gear reaches fully up or down after a transit | Lower rows, front and back, one thump |
 | Touchdown | Strut compression after at least 0.5 s airborne, with sink rate | All motors; intensity scales with sink rate |
@@ -137,9 +207,10 @@ drive the suit. Trusted networks only.
 ## Configuration
 
 Copy `config.example.ini` to `config.ini` and edit. All settings are
-optional. Available settings: master intensity scale, per-effect switches,
-stall AoA threshold, G onset and full-scale values, and UDP and Player
-ports.
+optional. Available settings: the Player transport, master
+intensity scale, per-effect
+switches, stall AoA threshold, G onset and full-scale values, and
+UDP, Player, and web console ports.
 
 ## Uninstall
 
@@ -150,9 +221,9 @@ this folder. No other files are modified.
 
 ```
 lua\              the DCS export script
-bhaptics_bridge\  the companion (telemetry, effects, Player client)
-tools\            fake_telemetry.py (scripted flight), mock_player.py (fake Player server), calibrate_pro.py (measure the grid-to-Pro mapping)
-tests\            python -m unittest discover tests
+bhaptics_bridge\  the companion (telemetry, effects, Player clients)
+tools\            fake_telemetry.py (scripted flight), calibrate_pro.py (measure the SDK1 grid-to-Pro mapping), probe_device_status.py and probe_sdk2.py (Player protocol probes)
+tests\            python -m unittest discover tests (mock_player.py is the fake SDK1 Player server)
 ```
 
 MIT license. See `LICENSE`.

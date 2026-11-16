@@ -114,53 +114,76 @@ class EffectEngine:
         cfg = self.cfg
         layout = self.layout
 
-        # Sustained: G load. Positive G starts low and climbs the vest as
-        # the pull builds: the two lower rows from g_onset, row 1 from
-        # ~45% of the range, the shoulder row from ~72%. Ordinary
-        # maneuvering (below g_onset) stays silent. Negative G pulls high.
+        # Sustained: G load, modelled as continuous pressure, the
+        # way a body feels it. The zero point is 1 G: level flight
+        # is the neutral state and stays silent. Above g_onset the
+        # squeeze grows smoothly with the load and climbs the
+        # vest - each row has its own ramp across the range, eased
+        # so rows fade in rather than switch on, and a load that
+        # hunts in an unsteady maneuver moves the squeeze
+        # proportionally instead of chattering at a threshold.
+        # Below neg_g_onset the feel inverts to the chest: the
+        # unload builds continuously as the load drops toward
+        # zero and negative, full at about -1 G. Airborne only:
+        # on the gear the reading carries no feel, and a getter
+        # that has not started returning yet reads gy = 0, deep
+        # in the unload band.
         if cfg.effect_g:
             frames = None
-            if cur.gy >= cfg.g_onset:
+            if not cur.on_ground and cur.gy > cfg.g_onset:
                 span = max(0.1, cfg.g_full - cfg.g_onset)
-                frac = min(1.0, (cur.gy - cfg.g_onset) / span)
-                points = {i: 25 + 45 * frac for i in layout.lower()}
-                g_mid = cfg.g_onset + 0.45 * span
-                if cur.gy >= g_mid:
-                    mid_i = 25 + 60 * min(1.0, (cur.gy - g_mid) / (cfg.g_full - g_mid))
-                    points.update({i: mid_i for i in layout.rows([1])})
-                g_high = cfg.g_onset + 0.72 * span
-                if cur.gy >= g_high:
-                    high_i = 30 + 70 * min(1.0, (cur.gy - g_high) / (cfg.g_full - g_high))
-                    points.update({i: high_i for i in layout.rows([0])})
-                frames = [
-                    self._frame_points("g", FRONT, points, 160),
-                    self._frame_points("g", BACK, points, 160),
-                ]
-            elif cur.gy <= cfg.neg_g_onset:
-                intensity = 30 + (cfg.neg_g_onset - cur.gy) * 50.0
-                frames = [
-                    self._frame("g", FRONT, layout.chest(), intensity, 160),
-                    self._frame("g", BACK, layout.chest(), intensity, 160),
-                ]
+                points = {}
+                # Per row (bottom to top): ramp start and full,
+                # as fractions of the onset-to-full span.
+                for row, start, full in ((3, 0.00, 0.43), (2, 0.15, 0.62),
+                                         (1, 0.34, 0.81), (0, 0.53, 1.00)):
+                    ramp = (cur.gy - cfg.g_onset - start * span) \
+                        / ((full - start) * span)
+                    if ramp <= 0.0:
+                        continue
+                    ramp = min(1.0, ramp)
+                    ease = ramp * ramp * (3.0 - 2.0 * ramp)
+                    points.update({i: 100.0 * ease
+                                   for i in layout.rows([row])})
+                if points:
+                    frames = [
+                        self._frame_points("g", FRONT, points, 160),
+                        self._frame_points("g", BACK, points, 160),
+                    ]
+            elif not cur.on_ground and cur.gy < cfg.neg_g_onset:
+                intensity = (cfg.neg_g_onset - cur.gy) * 50.0
+                if intensity >= 1.0:
+                    frames = [
+                        self._frame("g", FRONT, layout.chest(),
+                                    min(100.0, intensity), 160),
+                        self._frame("g", BACK, layout.chest(),
+                                    min(100.0, intensity), 160),
+                    ]
             out += self._sustain("g", frames, now)
 
-        # Sustained: afterburner rumble, low back.
+        # Sustained: afterburner rumble, low back. The draw
+        # arguments report the burner stage (0..1) and the rumble
+        # grows with it, the way light-off and staging build.
         if cfg.effect_burner:
             frames = None
-            if cur.ab1 > 0.5 or cur.ab2 > 0.5:
+            stage = max(cur.ab1, cur.ab2)
+            if stage > 0.05:
                 frames = [self._frame("ab", BACK, layout.rows([2, 3]),
-                                      38 + random.randint(-6, 6), 160)]
+                                      12 + 50 * stage
+                                      + random.randint(-5, 5), 160)]
             out += self._sustain("ab", frames, now)
 
-        # Sustained: stall buffet, whole vest shudder.
+        # Sustained: stall buffet, whole vest shudder, deepening
+        # as the angle of attack grows past the onset.
         if cfg.effect_stall:
             frames = None
             if not cur.on_ground and cur.agl > 3 and cur.aoa >= cfg.stall_aoa:
+                depth = min(1.0, 0.35 + (cur.aoa - cfg.stall_aoa) / 0.12)
                 frames = [
                     self._frame_points("stall", FRONT,
-                                       {i: random.randint(14, 30) for i in layout.all()}, 110),
+                                       {i: random.randint(14, 30) * depth for i in layout.all()}, 110),
                     self._frame_points("stall", BACK,
-                                       {i: random.randint(14, 30) for i in layout.all()}, 110),
+                                       {i: random.randint(14, 30) * depth for i in layout.all()}, 110),
                 ]
             out += self._sustain("stall", frames, now, period=0.10)
 
@@ -170,9 +193,17 @@ class EffectEngine:
         if cfg.effect_gun:
             frames = None
             if now - self.last_gun_time < 0.18:
-                gun_points = {i: 75 for i in layout.center([0])}
-                gun_points.update({i: 40 for i in layout.center([1])})
-                frames = [self._frame_points("gun", FRONT, gun_points, 110)]
+                # Full intensity, short frames: the 0.11 s sustain
+                # cadence re-emits them and each 60 ms frame ends
+                # before the next, so the burst pulses at ~9 Hz.
+                # A steady buzz is invisible exactly when the gun
+                # is used - a strafing dive, where the negative-G
+                # effect runs these same chest motors at the same
+                # level (measured signature over the chest wash:
+                # zero). The rhythm is the signature.
+                gun_points = {i: 100 for i in layout.center([0])}
+                gun_points.update({i: 55 for i in layout.center([1])})
+                frames = [self._frame_points("gun", FRONT, gun_points, 60)]
             out += self._sustain("gun", frames, now, period=0.11)
 
         # Gear transit thumps, and one solid thump when it locks.

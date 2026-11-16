@@ -3,3 +3,4 @@ __pycache__/
 *.log
 .venv/
 config.ini
+pro_mapping.json

@@ -1,0 +1,10 @@
+# Only needed for the default SDK2 transport. The legacy SDK1
+# transport (transport = sdk1 in config.ini) uses the Python
+# standard library only and needs nothing here.
+#
+# The package ships wheels for Python 3.8-3.13 only. On a newer
+# Python pip finds no matching distribution; install Python 3.12
+# alongside yours and use the py launcher instead:
+#   py -3.12 -m pip install -r requirements.txt
+#   py -3.12 -m bhaptics_bridge --test
+bhaptics-python==0.2.2

@@ -81,6 +81,7 @@
   <h1>DCS bHaptics Bridge — Web Console</h1>
   <div class="spacer"></div>
   <span class="pill" id="playerPill"><span class="dot"></span><span id="playerText">Bridge ↔ Player: …</span></span>
+  <span class="pill" id="vestPill" style="display:none"><span class="dot"></span><span id="vestText">Vest: …</span></span>
   <span class="pill" id="mapPill">Mapping: …</span>
 </header>
 <main>
@@ -175,8 +176,9 @@
 <footer>
   This page is served by the bridge on your local network, without authentication.
   Anyone on the LAN who opens it can drive the suit — trusted networks only.
-  Whether the vest itself is powered and paired is shown in bHaptics Player's own window;
-  the status above reports the bridge's connection to Player.
+  The Bridge ↔ Player pill reports the bridge's connection to Player. On the SDK2
+  transport the Vest pill also shows the vest's own state and battery; on SDK1 the
+  vest's state is visible only in bHaptics Player's own window.
 </footer>
 
 <script>
@@ -319,6 +321,26 @@ async function poll() {
     $("playerText").textContent =
       "Bridge ↔ Player: " + (s.player_connected ? "connected" : "not connected");
     $("mapPill").textContent = "Mapping: " + s.mapping_source;
+
+    // Vest pill: the suit's own state, reported by Player over
+    // SDK2. Hidden only when the transport cannot report it (SDK1).
+    if (s.vest) {
+      $("vestPill").style.display = "";
+      $("vestPill").classList.toggle("on", s.vest.connected === true);
+      let text;
+      if (s.vest.connected === true) {
+        text = "Vest: connected";
+        if (typeof s.vest.battery === "number")
+          text += " · " + s.vest.battery + "%";
+      } else if (s.vest.connected === false) {
+        text = "Vest: not connected";
+      } else {
+        text = "Vest: no report from Player yet";
+      }
+      $("vestText").textContent = text;
+    } else {
+      $("vestPill").style.display = "none";
+    }
 
     // Reflect a hold started from another client (or still running).
     for (const key in motorEls) motorEls[key].classList.remove("held");

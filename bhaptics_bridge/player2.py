@@ -1,0 +1,386 @@
+"""bHaptics Player client: the SDK2 transport (the default).
+
+Same role as player.py, spoken through the official bhaptics-python
+package instead of the hand-written SDK1 websocket client:
+
+- Motors are addressed directly: an effect frame in TactSuit Pro
+  motor space becomes one play_dot call with a 32-value array
+  (front motors 0-15, back motors 16-31). No grid, no translation,
+  no calibration.
+- Player reports device state, exposed via device_status() - the
+  web console's real vest indicator.
+- The package is a compiled binary and the project's one third-party
+  dependency. It is isolated behind the backend seam below: every
+  package call happens in _Sdk2Backend, and tests inject a fake
+  backend, so the rest of the bridge never imports the package.
+
+The package's API is async; the bridge is not. A private asyncio
+loop runs on a daemon thread and play calls are scheduled onto it
+fire-and-forget, mirroring the SDK1 client's behaviour.
+
+Durations: the SDK2 docs recommend >= 100 ms per play_dot call, so
+frame durations are floored at 100 ms. Effect frames are re-issued
+at 20 Hz by the engine, which keeps sustained effects continuous.
+
+Compositing: a play_dot call sets the whole vest at once, so
+submitting each effect frame as its own call would have every
+frame zero the motors of the effects submitted just before it -
+concurrent effects chopped each other up (measured: during a
+3 G turn with the cannon firing, two thirds of the calls carried
+the gun motors at zero). Submitted frames therefore register as
+time-boxed contributions here, and what reaches Player is the
+element-wise maximum over the live contributions, re-rendered on
+every submit and every poll. That restores the layering the SDK1
+client got from Player's keyed patterns.
+"""
+
+import asyncio
+import inspect
+import json
+import threading
+import time
+
+from .layout import FRONT, BACK, absolute
+
+VEST_POSITION = 0          # device type 0 = TactSuit Pro
+MOTOR_COUNT = 32
+MIN_DURATION_MS = 100      # vendor recommendation for play_dot
+STATUS_REFRESH = 2.0       # seconds between device-info polls
+
+
+async def _maybe_await(value):
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+class _Sdk2Backend:
+    """The only place bhaptics_python is imported or called."""
+
+    def __init__(self):
+        import bhaptics_python as bp
+        self.bp = bp
+
+    async def initialize(self):
+        return await _maybe_await(
+            self.bp.registry_and_initialize("", "", ""))
+
+    async def is_connected(self):
+        return await _maybe_await(self.bp.is_connected())
+
+    async def play_dot(self, duration_ms, values):
+        return await _maybe_await(
+            self.bp.play_dot(VEST_POSITION, duration_ms, values))
+
+    async def device_info_json(self):
+        return await _maybe_await(self.bp.get_device_info_json())
+
+    async def is_device_connected(self, position):
+        return await _maybe_await(
+            self.bp.is_bhaptics_device_connected(position))
+
+    async def stop_all(self):
+        return await _maybe_await(self.bp.stop_all())
+
+    async def close(self):
+        return await _maybe_await(self.bp.close())
+
+
+def parse_device_info(raw):
+    """Device-info payload -> list of device dicts (defensive).
+
+    Accepts the JSON string the package returns, or an already-parsed
+    list/dict. Unknown shapes yield an empty list rather than an
+    error: device status is advisory, never worth crashing over.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
+    if isinstance(raw, dict):
+        for key in ("devices", "Devices"):
+            if isinstance(raw.get(key), list):
+                return raw[key]
+        return [raw]
+    if isinstance(raw, list):
+        return [d for d in raw if isinstance(d, dict)]
+    return []
+
+
+def vest_status(devices):
+    """The TactSuit Pro entry of a parsed device list, or None."""
+    for device in devices:
+        if device.get("position") == VEST_POSITION:
+            return {
+                "connected": bool(device.get("connected")),
+                "paired": bool(device.get("paired")),
+                "battery": device.get("battery"),
+            }
+    return None
+
+
+class BhapticsPlayer2:
+    """SDK2 transport with the same interface as BhapticsPlayer."""
+
+    mapping_source = "direct (SDK2)"
+
+    def __init__(self, cfg, dry_run=False, log=print, backend=None):
+        self.cfg = cfg
+        self.dry_run = dry_run
+        self.log = log
+        self._backend = backend
+        self._backend_failed = False
+        self._loop = None
+        self._connected = False
+        self._next_retry = 0.0
+        self._devices = []
+        self._devices_at = 0.0
+        self._fetching = False
+        self._contrib = []       # [(expiry, [32 values])] live frames
+        self._sent = None        # last merged values sent to Player
+        self._vest_connected = None   # last is-connected answer
+        self._vest_logged = "unset"   # last vest state written to the log
+
+    # -- connection ---------------------------------------------------
+
+    @property
+    def connected(self):
+        return self.dry_run or self._connected
+
+    def _get_backend(self):
+        if self._backend is None and not self._backend_failed:
+            try:
+                self._backend = _Sdk2Backend()
+            except ImportError:
+                self._backend_failed = True
+                self.log("[player2] bhaptics-python is not installed; "
+                         "the SDK2 transport needs it: "
+                         "pip install bhaptics-python")
+        return self._backend
+
+    def _ensure_loop(self):
+        if self._loop is None:
+            self._loop = asyncio.new_event_loop()
+            thread = threading.Thread(target=self._loop.run_forever,
+                                      daemon=True)
+            thread.start()
+        return self._loop
+
+    def _run(self, coro, timeout):
+        future = asyncio.run_coroutine_threadsafe(coro, self._ensure_loop())
+        return future.result(timeout)
+
+    def _schedule(self, coro):
+        future = asyncio.run_coroutine_threadsafe(coro, self._ensure_loop())
+        future.add_done_callback(self._on_done)
+        return future
+
+    def _on_done(self, future):
+        if future.cancelled():
+            return
+        exc = future.exception()
+        if exc is not None:
+            self.log("[player2] SDK2 call failed: %s" % exc)
+
+    def ensure_connected(self):
+        if self.dry_run or self._connected:
+            return True
+        now = time.monotonic()
+        if now < self._next_retry:
+            return False
+        self._next_retry = now + 3.0
+        backend = self._get_backend()
+        if backend is None:
+            return False
+        try:
+            ok = self._run(backend.initialize(), timeout=25)
+        except Exception as exc:  # init failure is data, not a crash
+            self.log("[player2] SDK2 initialize failed: %s" % exc)
+            return False
+        self._connected = bool(ok)
+        if self._connected:
+            self.log("[player2] connected to bHaptics Player (SDK2)")
+            self._fetch_devices()
+        else:
+            self.log("[player2] SDK2 initialize was refused "
+                     "(Player running?)")
+        return self._connected
+
+    def poll(self):
+        if self.dry_run or not self._connected:
+            return
+        self._render(time.monotonic())
+        if time.monotonic() - self._devices_at >= STATUS_REFRESH:
+            self._fetch_devices()
+
+    def _fetch_devices(self):
+        if self._fetching or self._backend is None:
+            return
+        self._fetching = True
+
+        async def fetch():
+            try:
+                try:
+                    # Fetch only. Session state is deliberately NOT
+                    # re-derived here: initialization is one-shot (the
+                    # SDK auto-reconnects underneath it), and letting
+                    # a queried liveness answer clear the session flag
+                    # wedged status polling in practice - one False
+                    # stopped every later fetch, and the re-init that
+                    # followed reset the SDK's device tracking, whose
+                    # list then needs seconds to repopulate.
+                    raw = await self._backend.device_info_json()
+                    self._devices = parse_device_info(raw)
+                except Exception as exc:
+                    self.log("[player2] device info failed: %s" % exc)
+                try:
+                    self._vest_connected = bool(
+                        await self._backend.is_device_connected(
+                            VEST_POSITION))
+                except Exception:
+                    pass  # the device info flag is the fallback
+                try:
+                    self._log_vest_transition()
+                except Exception:
+                    pass  # a logging hiccup must not wedge polling
+            finally:
+                # Whatever happened above, the next poll must still
+                # run: a wedged fetch freezes the reported status.
+                self._devices_at = time.monotonic()
+                self._fetching = False
+
+        self._schedule(fetch())
+
+    def _log_vest_transition(self):
+        """Log the vest's own state when Player's report changes.
+
+        This is the SDK2 difference that matters for status: the
+        bridge can report the suit itself, not just its socket to
+        Player.
+        """
+        status = self.device_status()
+        if status is None:
+            return
+        connected = status["connected"]
+        if connected is None or connected == self._vest_logged:
+            return
+        self._vest_logged = connected
+        if connected:
+            battery = status.get("battery")
+            suffix = (" (battery %s%%)" % battery
+                      if isinstance(battery, (int, float)) else "")
+            self.log("[player2] vest: connected%s" % suffix)
+        else:
+            self.log("[player2] vest: not connected")
+
+    def device_status(self):
+        """Latest known vest state.
+
+        Always a dict on this transport (None only in dry-run,
+        where there is no Player to report anything). The device
+        info entry is the primary source: a 45-second probe that
+        polled both SDK sources once a second (2026-11-16) showed
+        the entry's connected flag and the direct is-connected
+        query agreeing at every step, through connect, drop and
+        reconnect - and the entry also carries battery and
+        pairing. The direct query answers only when no entry
+        exists yet: the list populates seconds after init, and an
+        absent entry with a silent query means "no report yet"
+        (connected None), never a guessed state.
+        """
+        if self.dry_run:
+            return None
+        info = vest_status(self._devices)
+        if info is not None:
+            return info
+        return {"connected": self._vest_connected,
+                "paired": None,
+                "battery": None}
+
+    # -- submission -----------------------------------------------------
+
+    def _values(self, position, pro_points):
+        values = [0] * MOTOR_COUNT
+        for pro, intensity in pro_points.items():
+            values[absolute(position, pro)] = max(0, min(100,
+                                                         int(intensity)))
+        return values
+
+    def _play(self, values, duration_ms):
+        duration_ms = max(MIN_DURATION_MS, int(duration_ms))
+        if self.dry_run:
+            self.log("[dry-run] sdk2 play_dot position=%d duration=%d "
+                     "values=%s" % (VEST_POSITION, duration_ms, values))
+            return True
+        if not self.ensure_connected():
+            return False
+        now = time.monotonic()
+        self._contrib.append((now + duration_ms / 1000.0, list(values)))
+        self._render(now)
+        return True
+
+    def _render(self, now):
+        """Send the merged vest state if it changed.
+
+        Live contributions merge by element-wise maximum; expired
+        ones drop out, so an effect ends by simply not being
+        re-submitted. A merged all-zero state is sent once, to
+        silence the vest, and then not again.
+        """
+        self._contrib = [(exp, v) for (exp, v) in self._contrib
+                         if exp > now]
+        merged = [0] * MOTOR_COUNT
+        latest = 0.0
+        for exp, values in self._contrib:
+            latest = max(latest, exp)
+            for i, v in enumerate(values):
+                if v > merged[i]:
+                    merged[i] = v
+        if merged == self._sent:
+            return
+        if not self._contrib and self._sent is None:
+            return  # never sent anything; nothing to silence
+        duration_ms = MIN_DURATION_MS
+        if self._contrib:
+            duration_ms = max(MIN_DURATION_MS,
+                              int((latest - now) * 1000))
+        self._sent = merged
+        self._schedule(self._backend.play_dot(duration_ms, merged))
+
+    def submit(self, frame):
+        """Submit an effect frame given in TactSuit Pro motor space."""
+        return self._play(self._values(frame.position, frame.points),
+                          frame.duration_ms)
+
+    def submit_pro_dot(self, key, position, pro_points, duration_ms):
+        """Submit raw points in Pro motor space (web console hold).
+
+        SDK2 dot mode has no frame keys; `key` is accepted for
+        interface parity with the SDK1 client and ignored.
+        """
+        return self._play(self._values(position, pro_points), duration_ms)
+
+    def turn_off_all(self, _keys_positions=None):
+        if self.dry_run:
+            return self._play([0] * MOTOR_COUNT, 30)
+        if not self.ensure_connected():
+            return False
+        self._contrib = []
+        self._sent = None
+        self._render(time.monotonic())
+        return True
+
+    def close(self):
+        if self._backend is not None and self._connected:
+            try:
+                self._run(self._backend.stop_all(), timeout=5)
+                self._run(self._backend.close(), timeout=5)
+            except Exception:
+                pass
+        self._connected = False
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._loop = None

@@ -14,12 +14,15 @@ _DEFAULTS = {
     "player_port": 15881,
     "app_id": "dcs_bhaptics_bridge",
     "app_name": "DCS bHaptics Bridge",
+    # Player transport: "sdk2" (default; the official bhaptics-python
+    # package) or "sdk1" (legacy built-in client).
+    "transport": "sdk2",
     "master_scale": 1.0,
     # [effects] thresholds
     "stall_aoa": 0.30,       # radians
-    "g_onset": 2.00,         # G where the squeeze starts
+    "g_onset": 1.20,         # above this load, the squeeze starts
     "g_full": 6.50,          # G where it reaches full intensity
-    "neg_g_onset": 0.20,     # below this load, the negative-G feel starts
+    "neg_g_onset": 0.85,     # below this load, the unload feel builds
     # [effects] toggles
     "effect_g": True,
     "effect_burner": True,

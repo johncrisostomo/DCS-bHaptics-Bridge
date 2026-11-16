@@ -7,14 +7,16 @@ the page can drive the suit. Trusted networks only.
 
 Three things live here:
 
-- Status: whether the bridge is connected to bHaptics Player. (The
-  SDK1 protocol cannot report whether the vest itself is powered and
-  paired; that state is only visible in Player's own window. If Player
-  is connected here and the suit check fires, the full chain works.)
+- Status: whether the bridge is connected to bHaptics Player, and -
+  on the SDK2 transport, which reports device state - whether the
+  vest itself is connected, with its battery level. (The SDK1
+  protocol cannot report vest state; there, if Player is connected
+  here and the suit check fires, the full chain works.)
 - Motor test: the TactSuit Pro drawn front and back with the official
   motor numbers. Pressing and holding a motor vibrates it until
-  released, translated to the SDK1 grid by bhaptics_bridge.pro_map -
-  the same translation the Player client applies to effect frames.
+  released, submitted in Pro motor space through the Player client's
+  submit_pro_dot - the same entry point, and on SDK1 the same
+  pro_map translation, the effect frames use.
 - Effect lab: the bridge's real EffectEngine fed with synthetic
   telemetry, so every effect (G, burner, stall, gear, touchdown,
   release, gun, countermeasures, damage, taxi) can be tested on the
@@ -23,12 +25,10 @@ Three things live here:
 
 import json
 import os
-import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import pro_map
 from .effects import EffectEngine
 from .layout import FRONT, BACK, ProLayout, absolute
 from .telemetry import Telemetry
@@ -38,55 +38,38 @@ HOLD_TIMEOUT = 15.0       # seconds; a stuck hold stops itself
 LAB_TICK = 0.05           # 20 Hz, same cadence as the DCS loop
 
 
-def _mapping_and_source():
-    """The Pro -> grid mapping (bhaptics_bridge.pro_map) + its source.
-
-    Falls back to the seed if a measured pro_mapping.json exists but
-    cannot be parsed, rather than taking the console down.
-    """
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    has_file = os.path.exists(os.path.join(root, "pro_mapping.json"))
-    try:
-        mapping = pro_map.load_mapping(root)
-    except (ValueError, TypeError, AttributeError, OSError):
-        with tempfile.TemporaryDirectory() as tmp:
-            mapping = pro_map.load_mapping(root=tmp)
-        return mapping, "seed (pro_mapping.json unreadable)"
-    return mapping, "pro_mapping.json" if has_file else "seed"
-
-
 class _Hold:
-    """One press-and-hold motor activation, re-submitted on a cadence."""
+    """One press-and-hold motor activation, re-submitted on a cadence.
 
-    def __init__(self, player, mapping, submit_lock):
+    Points stay in Pro motor space; the Player client owns whatever
+    its transport needs (SDK1 grid translation, SDK2 direct values).
+    """
+
+    def __init__(self, player, submit_lock):
         self.player = player
-        self.mapping = mapping
         self.lock = submit_lock
-        # (position, pro_index, live grid dict, zero grid dict,
-        #  intensity, deadline)
+        # (position, pro_index, intensity, deadline)
         self.state = None
         self._stop = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
     def start(self, position, pro_index, intensity):
-        live = pro_map.translate(self.mapping, position,
-                                 {pro_index: intensity})
-        zero = pro_map.translate(self.mapping, position, {pro_index: 0})
-        self.state = (position, pro_index, live, zero, intensity,
+        self.state = (position, pro_index, intensity,
                       time.monotonic() + HOLD_TIMEOUT)
 
     def stop(self):
         if self.state is not None:
-            position, _pro, _live, zero, _i, _d = self.state
+            position, pro_index, _i, _d = self.state
             self.state = None
             with self.lock:
-                self.player.submit_dot(HOLD_KEY, position, zero, 30)
+                self.player.submit_pro_dot(HOLD_KEY, position,
+                                           {pro_index: 0}, 30)
 
     def describe(self):
         if self.state is None:
             return None
-        position, pro_index, _live, _zero, intensity, _d = self.state
+        position, pro_index, intensity, _d = self.state
         return {"side": "front" if position == FRONT else "back",
                 "motor": absolute(position, pro_index),
                 "intensity": intensity}
@@ -95,13 +78,13 @@ class _Hold:
         while not self._stop.is_set():
             state = self.state
             if state is not None:
-                position, _pro, live, _zero, _i, deadline = state
+                position, pro_index, intensity, deadline = state
                 if time.monotonic() > deadline:
                     self.stop()
                 else:
                     with self.lock:
-                        self.player.submit_dot(HOLD_KEY, position,
-                                               live, 150)
+                        self.player.submit_pro_dot(
+                            HOLD_KEY, position, {pro_index: intensity}, 150)
             time.sleep(0.1)
 
     def close(self):
@@ -145,6 +128,10 @@ class EffectLab:
     def set_state(self, data):
         if "gy" in data:
             self.gy = max(-1.0, min(9.0, float(data["gy"])))
+            if self.gy != 1.0:
+                # A load factor other than 1 only exists in flight;
+                # the engine (correctly) ignores G on the gear.
+                self.airborne = True
         if "burner" in data:
             self.burner = bool(data["burner"])
         if "airborne" in data:
@@ -288,8 +275,8 @@ class WebConsole:
         self.player = player
         self.log = log
         self.lock = submit_lock or threading.Lock()
-        self.mapping, self.mapping_source = _mapping_and_source()
-        self.hold = _Hold(player, self.mapping, self.lock)
+        self.mapping_source = getattr(player, "mapping_source", "seed")
+        self.hold = _Hold(player, self.lock)
         self.lab = EffectLab(cfg, player, self.lock)
         self.httpd = None
 
@@ -302,10 +289,16 @@ class WebConsole:
         # the connection and report the result.
         with self.lock:
             self.player.ensure_connected()
+        # Vest state exists only on transports that report it (SDK2);
+        # the SDK1 client has no device_status and the page hides the
+        # vest pill when this is None.
+        device_status = getattr(self.player, "device_status", None)
+        vest = device_status() if callable(device_status) else None
         return {
             "player_connected": bool(self.player.connected),
             "device": "TactSuit Pro",
             "mapping_source": self.mapping_source,
+            "vest": vest,
             "hold": self.hold.describe(),
             "lab": self.lab.describe(),
         }
