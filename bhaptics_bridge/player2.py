@@ -21,6 +21,17 @@ fire-and-forget, mirroring the SDK1 client's behaviour.
 Durations: the SDK2 docs recommend >= 100 ms per play_dot call, so
 frame durations are floored at 100 ms. Effect frames are re-issued
 at 20 Hz by the engine, which keeps sustained effects continuous.
+
+Compositing: a play_dot call sets the whole vest at once, so
+submitting each effect frame as its own call would have every
+frame zero the motors of the effects submitted just before it -
+concurrent effects chopped each other up (measured: during a
+3 G turn with the cannon firing, two thirds of the calls carried
+the gun motors at zero). Submitted frames therefore register as
+time-boxed contributions here, and what reaches Player is the
+element-wise maximum over the live contributions, re-rendered on
+every submit and every poll. That restores the layering the SDK1
+client got from Player's keyed patterns.
 """
 
 import asyncio
@@ -128,6 +139,8 @@ class BhapticsPlayer2:
         self._devices = []
         self._devices_at = 0.0
         self._fetching = False
+        self._contrib = []       # [(expiry, [32 values])] live frames
+        self._sent = None        # last merged values sent to Player
         self._vest_connected = None   # last is-connected answer
         self._vest_logged = "unset"   # last vest state written to the log
 
@@ -199,6 +212,7 @@ class BhapticsPlayer2:
     def poll(self):
         if self.dry_run or not self._connected:
             return
+        self._render(time.monotonic())
         if time.monotonic() - self._devices_at >= STATUS_REFRESH:
             self._fetch_devices()
 
@@ -303,8 +317,38 @@ class BhapticsPlayer2:
             return True
         if not self.ensure_connected():
             return False
-        self._schedule(self._backend.play_dot(duration_ms, values))
+        now = time.monotonic()
+        self._contrib.append((now + duration_ms / 1000.0, list(values)))
+        self._render(now)
         return True
+
+    def _render(self, now):
+        """Send the merged vest state if it changed.
+
+        Live contributions merge by element-wise maximum; expired
+        ones drop out, so an effect ends by simply not being
+        re-submitted. A merged all-zero state is sent once, to
+        silence the vest, and then not again.
+        """
+        self._contrib = [(exp, v) for (exp, v) in self._contrib
+                         if exp > now]
+        merged = [0] * MOTOR_COUNT
+        latest = 0.0
+        for exp, values in self._contrib:
+            latest = max(latest, exp)
+            for i, v in enumerate(values):
+                if v > merged[i]:
+                    merged[i] = v
+        if merged == self._sent:
+            return
+        if not self._contrib and self._sent is None:
+            return  # never sent anything; nothing to silence
+        duration_ms = MIN_DURATION_MS
+        if self._contrib:
+            duration_ms = max(MIN_DURATION_MS,
+                              int((latest - now) * 1000))
+        self._sent = merged
+        self._schedule(self._backend.play_dot(duration_ms, merged))
 
     def submit(self, frame):
         """Submit an effect frame given in TactSuit Pro motor space."""
@@ -320,7 +364,14 @@ class BhapticsPlayer2:
         return self._play(self._values(position, pro_points), duration_ms)
 
     def turn_off_all(self, _keys_positions=None):
-        return self._play([0] * MOTOR_COUNT, 30)
+        if self.dry_run:
+            return self._play([0] * MOTOR_COUNT, 30)
+        if not self.ensure_connected():
+            return False
+        self._contrib = []
+        self._sent = None
+        self._render(time.monotonic())
+        return True
 
     def close(self):
         if self._backend is not None and self._connected:
