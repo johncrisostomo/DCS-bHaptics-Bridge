@@ -9,7 +9,7 @@ Player over a websocket.
 Source only: no installer, and nothing compiled is shipped by this
 project. The companion talks to bHaptics Player through the official
 SDK2 package (see Transport, below); a legacy SDK1 transport is
-included and needs no package, no account, and no API keys.
+included and needs no package.
 
 ## Scope
 
@@ -133,15 +133,6 @@ intensity per real motor (front 0-15, back 16-31), and Player
 reports device state back, which is what powers the web console's
 Vest pill. Two setup notes:
 
-- Credentials: SDK2 initialization takes an App ID and API key
-  from a haptic app registered in the bHaptics Developer Portal
-  (free). Put them in `config.ini` (`sdk2_app_id`, `sdk2_api_key`)
-  or the `BHAPTICS_APP_ID` / `BHAPTICS_API_KEY` environment
-  variables. The API key is a secret: `config.ini` is gitignored,
-  and the bridge never logs it. Credentials are optional: with
-  the current Player, empty values are accepted for direct motor
-  playback and device state (verified on the TactSuit Pro);
-  registering an app is there for setups that need it.
 - Behaviour: `play_dot` durations are floored at 100 ms (the
   vendor's recommended minimum), and the package maintains the
   Player connection itself, printing its own connection log lines.
@@ -157,7 +148,7 @@ Vest pill. Two setup notes:
 
 **SDK1 (legacy).** The bridge's built-in client speaks Player's
 older websocket protocol directly - standard library only, no
-package, no account, no credentials. Its limits are why SDK2 is
+package. Its limits are why SDK2 is
 the default: motors are addressed through a 20-point grid that
 must be translated to the Pro's motors (see
 `bhaptics_bridge/pro_map.py`), and the
@@ -216,8 +207,8 @@ drive the suit. Trusted networks only.
 ## Configuration
 
 Copy `config.example.ini` to `config.ini` and edit. All settings are
-optional. Available settings: the Player transport and SDK2
-credentials (see Transport), master intensity scale, per-effect
+optional. Available settings: the Player transport, master
+intensity scale, per-effect
 switches, stall AoA threshold, G onset and full-scale values, and
 UDP, Player, and web console ports.
 
