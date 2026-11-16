@@ -138,9 +138,10 @@ Vest pill. Two setup notes:
   (free). Put them in `config.ini` (`sdk2_app_id`, `sdk2_api_key`)
   or the `BHAPTICS_APP_ID` / `BHAPTICS_API_KEY` environment
   variables. The API key is a secret: `config.ini` is gitignored,
-  and the bridge never logs it. Whether Player accepts empty
-  credentials for direct motor playback is untested - if init is
-  refused with empty values, register the app and fill them in.
+  and the bridge never logs it. Credentials are optional: with
+  the current Player, empty values are accepted for direct motor
+  playback and device state (verified on the TactSuit Pro);
+  registering an app is there for setups that need it.
 - Behaviour: `play_dot` durations are floored at 100 ms (the
   vendor's recommended minimum), and the package maintains the
   Player connection itself, printing its own connection log lines.
@@ -148,7 +149,11 @@ Vest pill. Two setup notes:
   vest's state when it changes (`[player2] vest: connected
   (battery 82%)`), and the web console shows it in its Vest pill -
   connected / not connected, with battery level when Player
-  reports one.
+  reports one. One limit, in Player's reporting rather than the
+  bridge: the report is event-driven, and switching the vest off
+  does not reliably produce an update, so the pill can keep
+  showing the last reported state after a power-off. Connects
+  and reconnects are reported.
 
 **SDK1 (legacy).** The bridge's built-in client speaks Player's
 older websocket protocol directly - standard library only, no
