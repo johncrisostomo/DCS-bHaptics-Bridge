@@ -531,9 +531,24 @@ class Player2Tests(unittest.TestCase):
         self.assertTrue(_wait_for(
             lambda: player.device_status()["battery"] == 41))
         status = player.device_status()
-        # The device-info entry wins over the is-connected boolean.
-        self.assertFalse(status["connected"])
+        # The direct is-connected query wins for the connected
+        # flag (the fake's boolean defaults to True); the device
+        # info supplies the battery.
+        self.assertTrue(status["connected"])
         self.assertEqual(status["battery"], 41)
+
+    def test_stale_device_info_does_not_mask_power_off(self):
+        # Regression: Player's device list can keep the vest
+        # marked connected after power-off. The direct query
+        # says otherwise, and it must win.
+        raw = json.dumps([{"position": 0, "connected": True,
+                           "paired": True, "battery": 88}])
+        backend = _FakeBackend(device_info=raw, vest_connected=False)
+        player = self.make_player(backend)
+        self.assertTrue(player.ensure_connected())
+        self.assertTrue(_wait_for(
+            lambda: player.device_status()["connected"] is False))
+        self.assertEqual(player.device_status()["battery"], 88)
 
     def test_device_status_falls_back_to_is_connected(self):
         backend = _FakeBackend(device_info="[]", vest_connected=True)

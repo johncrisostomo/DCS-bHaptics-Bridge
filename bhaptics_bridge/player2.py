@@ -220,21 +220,31 @@ class BhapticsPlayer2:
 
         async def fetch():
             try:
-                # The SDK maintains the Player connection itself (it
-                # auto-reconnects), so liveness is queried, not assumed.
-                self._connected = bool(await self._backend.is_connected())
-                raw = await self._backend.device_info_json()
-                self._devices = parse_device_info(raw)
-            except Exception as exc:
-                self.log("[player2] device info failed: %s" % exc)
-            try:
-                self._vest_connected = bool(
-                    await self._backend.is_device_connected(VEST_POSITION))
-            except Exception:
-                pass  # advisory; the device info may still carry it
-            self._log_vest_transition()
-            self._devices_at = time.monotonic()
-            self._fetching = False
+                try:
+                    # The SDK maintains the Player connection itself
+                    # (it auto-reconnects), so liveness is queried,
+                    # not assumed.
+                    self._connected = bool(
+                        await self._backend.is_connected())
+                    raw = await self._backend.device_info_json()
+                    self._devices = parse_device_info(raw)
+                except Exception as exc:
+                    self.log("[player2] device info failed: %s" % exc)
+                try:
+                    self._vest_connected = bool(
+                        await self._backend.is_device_connected(
+                            VEST_POSITION))
+                except Exception:
+                    pass  # the device info flag is the fallback
+                try:
+                    self._log_vest_transition()
+                except Exception:
+                    pass  # a logging hiccup must not wedge polling
+            finally:
+                # Whatever happened above, the next poll must still
+                # run: a wedged fetch freezes the reported status.
+                self._devices_at = time.monotonic()
+                self._fetching = False
 
         self._schedule(fetch())
 
@@ -264,20 +274,24 @@ class BhapticsPlayer2:
         """Latest known vest state.
 
         Always a dict on this transport (None only in dry-run,
-        where there is no Player to report anything): "connected"
-        is True/False once Player has reported the vest - from its
-        device info when present, else from the SDK's direct
-        is-connected query - and None while nothing has been
-        reported yet.
+        where there is no Player to report anything). "connected"
+        comes from the SDK's direct is-connected query - the
+        purpose-built answer, refreshed every poll. The device
+        info list supplies battery and pairing, but its connected
+        flag is only a fallback for when the direct query has
+        never answered: a cached device list can keep a vest
+        marked connected after it has powered off, which is
+        exactly the state the direct query exists to correct.
         """
         if self.dry_run:
             return None
-        status = vest_status(self._devices)
-        if status is not None:
-            return status
-        return {"connected": self._vest_connected,
-                "paired": None,
-                "battery": None}
+        info = vest_status(self._devices) or {}
+        connected = self._vest_connected
+        if connected is None:
+            connected = info.get("connected")
+        return {"connected": connected,
+                "paired": info.get("paired"),
+                "battery": info.get("battery")}
 
     # -- submission -----------------------------------------------------
 
