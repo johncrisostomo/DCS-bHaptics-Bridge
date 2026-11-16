@@ -80,7 +80,7 @@
 <header>
   <h1>DCS bHaptics Bridge — Web Console</h1>
   <div class="spacer"></div>
-  <span class="pill" id="playerPill"><span class="dot"></span><span id="playerText">bHaptics Player: …</span></span>
+  <span class="pill" id="playerPill"><span class="dot"></span><span id="playerText">Bridge ↔ Player: …</span></span>
   <span class="pill" id="mapPill">Mapping: …</span>
 </header>
 <main>
@@ -317,7 +317,7 @@ async function poll() {
     const s = await r.json();
     $("playerPill").classList.toggle("on", s.player_connected);
     $("playerText").textContent =
-      "bHaptics Player: " + (s.player_connected ? "connected" : "not connected");
+      "Bridge ↔ Player: " + (s.player_connected ? "connected" : "not connected");
     $("mapPill").textContent = "Mapping: " + s.mapping_source;
 
     // Reflect a hold started from another client (or still running).
@@ -345,7 +345,7 @@ async function poll() {
       lab.gear >= 0.99 ? "down" : lab.gear <= 0.01 ? "up" : "transit " + Math.round(lab.gear * 100) + "%";
   } catch (e) {
     $("playerPill").classList.remove("on");
-    $("playerText").textContent = "bHaptics Player: bridge unreachable";
+    $("playerText").textContent = "Bridge ↔ Player: bridge unreachable";
   }
 }
 poll();
