@@ -41,10 +41,13 @@ DCS World --(Lua export script, UDP 127.0.0.1:41231)--> Python companion --(WebS
 - Windows 10 or later
 - DCS World (Steam or standalone)
 - bHaptics Player, with a TactSuit Pro connected
-- Python 3.10 or later (3.12 at most: the SDK2 package supports
-  Python 3.8-3.12). The default SDK2 transport needs the
-  `bhaptics-python` package; the legacy SDK1 transport needs only
-  the standard library
+- Python 3.10 or later - with one limit: the SDK2 package ships
+  wheels for Python 3.8-3.13, so on Python 3.14+ it cannot be
+  installed. Python 3.12 is the verified combination; if your
+  default Python is newer, install 3.12 alongside it and run the
+  bridge with `py -3.12` (Windows) - the SDK1 transport and the
+  rest of your system are unaffected. The legacy SDK1 transport
+  needs only the standard library, on any Python 3.10+
 
 ## Install
 
@@ -76,6 +79,14 @@ the one dependency:
 
 ```
 pip install -r requirements.txt
+```
+
+On Python 3.14 or newer that fails with "No matching distribution
+found" (see Requirements); use the Python 3.12 interpreter instead:
+
+```
+py -3.12 -m pip install -r requirements.txt
+py -3.12 -m bhaptics_bridge --test
 ```
 
 (Only the legacy SDK1 transport skips this step.)
