@@ -8,6 +8,8 @@ _DEFAULTS = {
     # [bridge]
     "udp_host": "127.0.0.1",
     "udp_port": 41231,
+    "web_host": "0.0.0.0",
+    "web_port": 41232,
     "player_host": "127.0.0.1",
     "player_port": 15881,
     "app_id": "dcs_bhaptics_bridge",
@@ -32,7 +34,7 @@ _DEFAULTS = {
 }
 
 _BOOL_KEYS = {k for k, v in _DEFAULTS.items() if isinstance(v, bool)}
-_INT_KEYS = {"udp_port", "player_port"}
+_INT_KEYS = {"udp_port", "player_port", "web_port"}
 _FLOAT_KEYS = {k for k, v in _DEFAULTS.items() if isinstance(v, float)}
 
 
