@@ -91,10 +91,10 @@ py -3.12 -m bhaptics_bridge --test
 
 (Only the legacy SDK1 transport skips this step.)
 
-**No-dependency alternative:** release **v0.3.0** is the frozen
+**No-dependency alternative:** release **v0.3.1** is the frozen
 SDK1 build - standard library only, nothing to install. If you
 want that version, download it from the
-[releases page](https://github.com/johncrisostomo/DCS-bHaptics-Bridge/releases/tag/v0.3.0)
+[releases page](https://github.com/johncrisostomo/DCS-bHaptics-Bridge/releases/tag/v0.3.1)
 instead of using this branch.
 
 ## Run
@@ -157,11 +157,11 @@ the default: motors are addressed through a 20-point grid that
 must be translated to the Pro's motors (see
 `bhaptics_bridge/pro_map.py`), and the
 protocol reports no device state. Set `transport = sdk1` to use
-it; it is the transport the v0.3.0 release shipped with, kept as a
+it; it is the transport the v0.3.1 release shipped with, kept as a
 fallback. That release is also the standing no-dependency
 version: if you want the bridge with nothing to install, check
 out
-[v0.3.0](https://github.com/johncrisostomo/DCS-bHaptics-Bridge/releases/tag/v0.3.0)
+[v0.3.1](https://github.com/johncrisostomo/DCS-bHaptics-Bridge/releases/tag/v0.3.1)
 instead - it is frozen and receives no new features.
 
 ## Web console
