@@ -13,9 +13,8 @@ Three things live here:
   is connected here and the suit check fires, the full chain works.)
 - Motor test: the TactSuit Pro drawn front and back with the official
   motor numbers. Pressing and holding a motor vibrates it until
-  released, through the same Pro -> SDK1 grid translation the bridge
-  uses for effects (seed table, or pro_mapping.json when present -
-  the same file format as bhaptics_bridge.pro_map on the Pro branch).
+  released, translated to the SDK1 grid by bhaptics_bridge.pro_map -
+  the same translation the Player client applies to effect frames.
 - Effect lab: the bridge's real EffectEngine fed with synthetic
   telemetry, so every effect (G, burner, stall, gear, touchdown,
   release, gun, countermeasures, damage, taxi) can be tested on the
@@ -24,60 +23,36 @@ Three things live here:
 
 import json
 import os
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import pro_map
 from .effects import EffectEngine
-from .layout import FRONT, BACK, VestLayout
+from .layout import FRONT, BACK, ProLayout, absolute
 from .telemetry import Telemetry
 
 HOLD_KEY = "web-hold"
 HOLD_TIMEOUT = 15.0       # seconds; a stuck hold stops itself
 LAB_TICK = 0.05           # 20 Hz, same cadence as the DCS loop
 
-# ---------------------------------------------------------------------
-# Pro motor -> SDK1 grid translation (seed).
-#
-# Same seed and same pro_mapping.json format as the Pro-layout work:
-# both grids are row-major, 4 columns wide, numbered from the top-left;
-# grid row 4 (points 16-19) falls on the Pro's bottom row (12-15).
-# ---------------------------------------------------------------------
 
+def _mapping_and_source():
+    """The Pro -> grid mapping (bhaptics_bridge.pro_map) + its source.
 
-def _seed_pro_to_grid():
-    table = {}
-    for pro in range(16):
-        row, _col = divmod(pro, 4)
-        if row < 3:
-            table[pro] = [pro]
-        else:
-            table[pro] = [pro, pro + 4]
-    return table
-
-
-def load_pro_mapping(root=None):
-    """{position: {pro_index: [grid points]}}; measured file wins."""
-    seed = _seed_pro_to_grid()
-    mapping = {FRONT: dict(seed), BACK: dict(seed)}
-    source = "seed"
-    if root is None:
-        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    path = os.path.join(root, "pro_mapping.json")
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as fh:
-                raw = json.load(fh)
-            for side_key, position in (("front", FRONT), ("back", BACK)):
-                for pro_key, grids in raw.get(side_key, {}).items():
-                    pro = int(pro_key)
-                    grid_list = [int(g) for g in grids]
-                    if 0 <= pro < 16 and all(0 <= g < 20 for g in grid_list):
-                        mapping[position][pro] = grid_list
-            source = "pro_mapping.json"
-        except (ValueError, TypeError, AttributeError):
-            source = "seed (pro_mapping.json unreadable)"
-    return mapping, source
+    Falls back to the seed if a measured pro_mapping.json exists but
+    cannot be parsed, rather than taking the console down.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    has_file = os.path.exists(os.path.join(root, "pro_mapping.json"))
+    try:
+        mapping = pro_map.load_mapping(root)
+    except (ValueError, TypeError, AttributeError, OSError):
+        with tempfile.TemporaryDirectory() as tmp:
+            mapping = pro_map.load_mapping(root=tmp)
+        return mapping, "seed (pro_mapping.json unreadable)"
+    return mapping, "pro_mapping.json" if has_file else "seed"
 
 
 class _Hold:
@@ -87,47 +62,46 @@ class _Hold:
         self.player = player
         self.mapping = mapping
         self.lock = submit_lock
-        self.state = None  # (position, pro_index, grid_points, intensity, deadline)
+        # (position, pro_index, live grid dict, zero grid dict,
+        #  intensity, deadline)
+        self.state = None
         self._stop = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
 
     def start(self, position, pro_index, intensity):
-        grids = self.mapping[position][pro_index]
-        self.state = (position, pro_index, grids, intensity,
+        live = pro_map.translate(self.mapping, position,
+                                 {pro_index: intensity})
+        zero = pro_map.translate(self.mapping, position, {pro_index: 0})
+        self.state = (position, pro_index, live, zero, intensity,
                       time.monotonic() + HOLD_TIMEOUT)
 
     def stop(self):
         if self.state is not None:
-            position, _pro, grids, _i, _d = self.state
+            position, _pro, _live, zero, _i, _d = self.state
             self.state = None
-            self._zero(position, grids)
+            with self.lock:
+                self.player.submit_dot(HOLD_KEY, position, zero, 30)
 
     def describe(self):
         if self.state is None:
             return None
-        position, pro_index, _g, intensity, _d = self.state
+        position, pro_index, _live, _zero, intensity, _d = self.state
         return {"side": "front" if position == FRONT else "back",
-                "motor": pro_index if position == FRONT else pro_index + 16,
+                "motor": absolute(position, pro_index),
                 "intensity": intensity}
-
-    def _zero(self, position, grids):
-        with self.lock:
-            self.player.submit_dot(HOLD_KEY, position,
-                                   {g: 0 for g in grids}, 30)
 
     def _run(self):
         while not self._stop.is_set():
             state = self.state
             if state is not None:
-                position, _pro, grids, intensity, deadline = state
+                position, _pro, live, _zero, _i, deadline = state
                 if time.monotonic() > deadline:
                     self.stop()
                 else:
                     with self.lock:
-                        self.player.submit_dot(
-                            HOLD_KEY, position,
-                            {g: intensity for g in grids}, 150)
+                        self.player.submit_dot(HOLD_KEY, position,
+                                               live, 150)
             time.sleep(0.1)
 
     def close(self):
@@ -141,7 +115,7 @@ class EffectLab:
     def __init__(self, cfg, player, submit_lock):
         self.player = player
         self.lock = submit_lock
-        self.engine = EffectEngine(cfg, VestLayout(cfg.flip_vertical))
+        self.engine = EffectEngine(cfg, ProLayout())
         self.tel = Telemetry()
         self.tel.ac = True
         self.tel.name = "WEB_LAB"
@@ -314,7 +288,7 @@ class WebConsole:
         self.player = player
         self.log = log
         self.lock = submit_lock or threading.Lock()
-        self.mapping, self.mapping_source = load_pro_mapping()
+        self.mapping, self.mapping_source = _mapping_and_source()
         self.hold = _Hold(player, self.mapping, self.lock)
         self.lab = EffectLab(cfg, player, self.lock)
         self.httpd = None
