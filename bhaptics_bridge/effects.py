@@ -40,7 +40,6 @@ class EffectEngine:
         self.taxi_next = 0.0
         self.airborne_since = None
         self.in_session = False
-        self._neg_g = False
 
     # -- helpers ---------------------------------------------------------
     def _scale(self, value):
@@ -80,7 +79,6 @@ class EffectEngine:
         """Suit check: a wave down the front, then the back, then all on."""
         self.in_session = True
         self.prev = None
-        self._neg_g = False
         self.pattern = []
         layout = self.layout
         t = 0.0
@@ -102,7 +100,6 @@ class EffectEngine:
         self.active = {}
         self.pattern = []
         self.prev = None
-        self._neg_g = False
         self.airborne_since = None
         return frames
 
@@ -117,68 +114,76 @@ class EffectEngine:
         cfg = self.cfg
         layout = self.layout
 
-        # Sustained: G load. Positive G starts low and climbs the vest as
-        # the pull builds: the two lower rows from g_onset, row 1 from
-        # ~45% of the range, the shoulder row from ~72%. Ordinary
-        # maneuvering (below g_onset) stays silent. Negative G pulls high.
-        # Airborne only: on the gear the load reading is meaningless for
-        # feel, and a getter that has not started returning yet reads
-        # gy = 0, which the negative-G branch would otherwise sustain
-        # as a continuous chest vibration on the ramp.
+        # Sustained: G load, modelled as continuous pressure, the
+        # way a body feels it. The zero point is 1 G: level flight
+        # is the neutral state and stays silent. Above g_onset the
+        # squeeze grows smoothly with the load and climbs the
+        # vest - each row has its own ramp across the range, eased
+        # so rows fade in rather than switch on, and a load that
+        # hunts in an unsteady maneuver moves the squeeze
+        # proportionally instead of chattering at a threshold.
+        # Below neg_g_onset the feel inverts to the chest: the
+        # unload builds continuously as the load drops toward
+        # zero and negative, full at about -1 G. Airborne only:
+        # on the gear the reading carries no feel, and a getter
+        # that has not started returning yet reads gy = 0, deep
+        # in the unload band.
         if cfg.effect_g:
             frames = None
-            if not cur.on_ground and cur.gy >= cfg.g_onset:
+            if not cur.on_ground and cur.gy > cfg.g_onset:
                 span = max(0.1, cfg.g_full - cfg.g_onset)
-                frac = min(1.0, (cur.gy - cfg.g_onset) / span)
-                points = {i: 25 + 45 * frac for i in layout.lower()}
-                g_mid = cfg.g_onset + 0.45 * span
-                if cur.gy >= g_mid:
-                    mid_i = 25 + 60 * min(1.0, (cur.gy - g_mid) / (cfg.g_full - g_mid))
-                    points.update({i: mid_i for i in layout.rows([1])})
-                g_high = cfg.g_onset + 0.72 * span
-                if cur.gy >= g_high:
-                    high_i = 30 + 70 * min(1.0, (cur.gy - g_high) / (cfg.g_full - g_high))
-                    points.update({i: high_i for i in layout.rows([0])})
-                frames = [
-                    self._frame_points("g", FRONT, points, 160),
-                    self._frame_points("g", BACK, points, 160),
-                ]
-            elif not cur.on_ground:
-                # Negative G, with hysteresis: enter a step below
-                # the onset, stay until the load recovers a step
-                # above it. Without the band, an unsteady dive or
-                # bank hunts across the threshold and the chest
-                # chatters on and off instead of holding.
-                if self._neg_g and cur.gy > cfg.neg_g_onset + 0.10:
-                    self._neg_g = False
-                elif cur.gy <= cfg.neg_g_onset - 0.05:
-                    self._neg_g = True
-                if self._neg_g:
-                    intensity = min(100.0, max(
-                        30.0, 30 + (cfg.neg_g_onset - cur.gy) * 50.0))
+                points = {}
+                # Per row (bottom to top): ramp start and full,
+                # as fractions of the onset-to-full span.
+                for row, start, full in ((3, 0.00, 0.43), (2, 0.15, 0.62),
+                                         (1, 0.34, 0.81), (0, 0.53, 1.00)):
+                    ramp = (cur.gy - cfg.g_onset - start * span) \
+                        / ((full - start) * span)
+                    if ramp <= 0.0:
+                        continue
+                    ramp = min(1.0, ramp)
+                    ease = ramp * ramp * (3.0 - 2.0 * ramp)
+                    points.update({i: 100.0 * ease
+                                   for i in layout.rows([row])})
+                if points:
                     frames = [
-                        self._frame("g", FRONT, layout.chest(), intensity, 160),
-                        self._frame("g", BACK, layout.chest(), intensity, 160),
+                        self._frame_points("g", FRONT, points, 160),
+                        self._frame_points("g", BACK, points, 160),
+                    ]
+            elif not cur.on_ground and cur.gy < cfg.neg_g_onset:
+                intensity = (cfg.neg_g_onset - cur.gy) * 50.0
+                if intensity >= 1.0:
+                    frames = [
+                        self._frame("g", FRONT, layout.chest(),
+                                    min(100.0, intensity), 160),
+                        self._frame("g", BACK, layout.chest(),
+                                    min(100.0, intensity), 160),
                     ]
             out += self._sustain("g", frames, now)
 
-        # Sustained: afterburner rumble, low back.
+        # Sustained: afterburner rumble, low back. The draw
+        # arguments report the burner stage (0..1) and the rumble
+        # grows with it, the way light-off and staging build.
         if cfg.effect_burner:
             frames = None
-            if cur.ab1 > 0.5 or cur.ab2 > 0.5:
+            stage = max(cur.ab1, cur.ab2)
+            if stage > 0.05:
                 frames = [self._frame("ab", BACK, layout.rows([2, 3]),
-                                      38 + random.randint(-6, 6), 160)]
+                                      12 + 50 * stage
+                                      + random.randint(-5, 5), 160)]
             out += self._sustain("ab", frames, now)
 
-        # Sustained: stall buffet, whole vest shudder.
+        # Sustained: stall buffet, whole vest shudder, deepening
+        # as the angle of attack grows past the onset.
         if cfg.effect_stall:
             frames = None
             if not cur.on_ground and cur.agl > 3 and cur.aoa >= cfg.stall_aoa:
+                depth = min(1.0, 0.35 + (cur.aoa - cfg.stall_aoa) / 0.12)
                 frames = [
                     self._frame_points("stall", FRONT,
-                                       {i: random.randint(14, 30) for i in layout.all()}, 110),
+                                       {i: random.randint(14, 30) * depth for i in layout.all()}, 110),
                     self._frame_points("stall", BACK,
-                                       {i: random.randint(14, 30) for i in layout.all()}, 110),
+                                       {i: random.randint(14, 30) * depth for i in layout.all()}, 110),
                 ]
             out += self._sustain("stall", frames, now, period=0.10)
 

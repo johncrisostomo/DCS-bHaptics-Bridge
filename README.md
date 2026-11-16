@@ -191,10 +191,10 @@ drive the suit. Trusted networks only.
 | Effect | Trigger | Motors |
 |---|---|---|
 | Suit check | First aircraft entry | Front rows top to bottom, then back rows |
-| Positive G | Load factor at or above `g_onset` (default 2.0) | Front and back; lower rows first, higher rows added as load increases |
-| Negative G | Load factor at or below 0.2 | Chest and shoulders, front and back |
-| Afterburner | Afterburner lit (draw arguments 28/29) | Lower back rows |
-| Stall buffet | Angle of attack at or above threshold (default 0.30 rad), airborne | All motors, random low intensity |
+| Positive G | Load factor above `g_onset` (default 1.2); 1 G is the silent neutral point | Front and back; the squeeze grows continuously with load, starting in the lower rows and climbing |
+| Negative G | Load factor below `neg_g_onset` (default 0.85) | Chest, front and back; builds continuously as the load drops, full at about −1 G |
+| Afterburner | Afterburner stage above zero (draw arguments 28/29) | Lower back rows; rumble grows with the stage |
+| Stall buffet | Angle of attack at or above threshold (default 0.30 rad), airborne | All motors, random intensity that deepens past the threshold |
 | Gear transit | Gear position between up and down | Lower rows, alternating front and back |
 | Gear locked | Gear reaches fully up or down after a transit | Lower rows, front and back, one thump |
 | Touchdown | Strut compression after at least 0.5 s airborne, with sink rate | All motors; intensity scales with sink rate |

@@ -20,9 +20,9 @@ _DEFAULTS = {
     "master_scale": 1.0,
     # [effects] thresholds
     "stall_aoa": 0.30,       # radians
-    "g_onset": 2.00,         # G where the squeeze starts
+    "g_onset": 1.20,         # above this load, the squeeze starts
     "g_full": 6.50,          # G where it reaches full intensity
-    "neg_g_onset": 0.20,     # below this load, the negative-G feel starts
+    "neg_g_onset": 0.85,     # below this load, the unload feel builds
     # [effects] toggles
     "effect_g": True,
     "effect_burner": True,

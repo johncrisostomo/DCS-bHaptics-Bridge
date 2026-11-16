@@ -186,26 +186,28 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(gun[0].duration_ms, 60)
         self.assertEqual(max(gun[0].points.values()), 100)
 
-    def test_negative_g_has_hysteresis(self):
+    def test_negative_g_is_continuous(self):
         base = dict(wow1=0, wow4=0, wow6=0, agl=500)
 
-        def g_points(gy, feeds=6):
-            found = []
+        def chest_intensity(gy, feeds=6):
+            best = 0
             for _ in range(feeds):
                 frames = self.feed(make_tel(gy=gy, **base))
-                found += [f for f in frames_with(frames, "g")
-                          if any(v > 0 for v in f.points.values())]
-            return found
+                for f in frames_with(frames, "g"):
+                    if f.points:
+                        best = max(best, max(f.points.values()))
+            return best
 
-        # Below the entry step (onset 0.20, entry 0.15): on.
-        self.assertTrue(g_points(0.10))
-        # Inside the exit band (exit at 0.30): still on - without
-        # hysteresis this hunted on and off across the onset.
-        self.assertTrue(g_points(0.25))
-        # Above the exit step: off.
-        self.assertFalse(g_points(0.35))
+        # Above the unload onset (0.85): silent - 1 G is neutral.
+        self.assertEqual(chest_intensity(0.95), 0)
+        # The feel builds continuously as the load drops; there
+        # is no cliff at a threshold for it to chatter across.
+        light = chest_intensity(0.5)
+        deep = chest_intensity(-0.5)
+        self.assertGreater(light, 0)
+        self.assertGreater(deep, light)
 
-    def test_g_tiers_climb_the_vest(self):
+    def test_g_climbs_the_vest_continuously(self):
         base = dict(wow1=0, wow4=0, wow6=0, agl=500)
 
         def g_indices(gy):
@@ -217,10 +219,15 @@ class EngineTests(unittest.TestCase):
                     return set(g[0].points)
             self.fail("no g frame at gy=%s" % gy)
 
-        # Ordinary maneuvering below onset: silent.
-        frames = self.feed(make_tel(gy=1.5, **base))
+        # Below the onset the squeeze has not started: silent.
+        frames = self.feed(make_tel(gy=1.1, **base))
         self.assertFalse(frames_with(frames, "g"))
-        # Moderate pull: lower rows only (per-side indices 8-15).
+        # Just above it the bottom row only, fading in - the
+        # climb is continuous, not tiered switching.
+        idx = g_indices(1.5)
+        self.assertTrue(idx)
+        self.assertTrue(all(i >= 12 for i in idx))
+        # Moderate pull: the two lower rows (per-side indices 8-15).
         idx = g_indices(3.0)
         self.assertTrue(idx)
         self.assertTrue(all(i >= 8 for i in idx))
@@ -255,7 +262,10 @@ class EngineTests(unittest.TestCase):
         frames = self.feed(make_tel(gy=3.5, **base))
         g = frames_with(frames, "g")
         self.assertTrue(g)
-        self.assertTrue(all(v > 30 for v in g[0].points.values()))
+        # Continuous model: the bottom row is near full at 3.5 G
+        # while the next rows are still fading in from zero.
+        self.assertGreater(max(g[0].points.values()), 80)
+        self.assertTrue(all(v > 0 for v in g[0].points.values()))
         # Returning to 1 G zeroes the effect.
         frames = self.feed(make_tel(gy=3.5, **base))  # cadence: may be empty
         frames = self.feed(make_tel(gy=1.0, **base))
