@@ -81,6 +81,28 @@ To stop, close the console window or press `Ctrl+C`.
   (takeoff, gear cycle, G pull, weapon release, gun burst, damage,
   touchdown) to the bridge without DCS.
 
+## Web console
+
+`python -m bhaptics_bridge --web` also serves a web page on the local
+network, at `http://<this PC's address>:41232` (port and bind address
+are `web_host` / `web_port` in the config). It has three parts:
+
+- **Status.** Whether the bridge is connected to bHaptics Player. The
+  protocol cannot report whether the vest itself is powered and
+  paired; that is shown in Player's own window.
+- **Motor test.** The TactSuit Pro drawn front and back with the
+  official motor numbers (front in mirror view, as in the bHaptics
+  diagram). Pressing and holding a motor vibrates it until released,
+  through the same Pro-to-grid translation the effects use (seed
+  table, or `pro_mapping.json` when present).
+- **Effect lab.** The effect engine fed with synthetic telemetry, so
+  every effect — G load, afterburner, stall, gear, touchdown, weapon
+  release, gun, countermeasures, damage, taxi — can be tested without
+  starting DCS.
+
+There is no authentication: anyone on the LAN who opens the page can
+drive the suit. Trusted networks only.
+
 ## Effects
 
 | Effect | Trigger | Motors |
