@@ -10,12 +10,17 @@ query parameters, and submits dot-mode frames as JSON:
 
 The field casing follows the format observed from real SDK1 client
 traffic. In dry-run mode nothing is sent; frames are printed instead.
+
+Frames arrive in TactSuit Pro motor space (see layout.py) and are
+translated to the SDK1 20-point grid here, via pro_map, just before
+submission.
 """
 
 import json
 import time
 import urllib.parse
 
+from . import pro_map
 from .wsclient import WebSocketClient, WebSocketError
 
 
@@ -26,6 +31,7 @@ class BhapticsPlayer:
         self.log = log
         self.ws = None
         self._next_retry = 0.0
+        self.mapping = pro_map.load_mapping()
 
     @property
     def connected(self):
@@ -97,7 +103,10 @@ class BhapticsPlayer:
             return False
 
     def submit(self, frame):
-        return self.submit_dot(frame.key, frame.position, frame.points, frame.duration_ms)
+        """Submit an effect frame given in TactSuit Pro motor space."""
+        grid_points = pro_map.translate(self.mapping, frame.position, frame.points)
+        return self.submit_dot(frame.key, frame.position, grid_points,
+                               frame.duration_ms)
 
     def turn_off_all(self, keys_positions):
         for key, position in keys_positions:

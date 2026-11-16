@@ -1,57 +1,63 @@
-"""TactSuit motor layout in the SDK1 dot-mode grid.
+"""TactSuit Pro motor layout.
 
-bHaptics Player is addressed with two positions, "VestFront" and
-"VestBack", each a grid of 20 points (indices 0-19). Player maps that
-grid onto the connected device (a TactSuit Pro has 16 motors per side).
+This project targets the bHaptics TactSuit Pro only. The Pro has 32
+motors: 16 on the front, 16 on the back, arranged as a 4x4 grid per side.
 
-The grid is 4 columns x 5 rows, index = row * 4 + column, row 0 at the
-top, as used by SDK1-era clients. If the rows feel upside down on your
-suit, set flip_vertical in config.ini — it is a known calibration
-suspect on a first run.
+Motor numbering follows bHaptics' official Motor Index page
+(docs.bhaptics.com/sdk/further/motor):
+
+- Front motors are 0-15, back motors are 16-31 (the "absolute" index).
+- Per side, the index is row-major: index = row * 4 + column, with
+  row 0 at the top and column 0 at the wearer's left.
+
+This module works in per-side indices (0-15) plus a side ("VestFront" /
+"VestBack"), which is how the effect engine addresses motors. Use
+absolute() when a single 0-31 number is needed (the calibration tool
+and the official diagram use absolute numbers).
+
+Effects are defined in this Pro motor space. bhaptics_bridge.pro_map
+translates Pro motors to the SDK1 dot grid that bHaptics Player accepts.
 """
 
 FRONT = "VestFront"
 BACK = "VestBack"
 
 COLS = 4
-ROWS = 5
-POINTS_PER_SIDE = COLS * ROWS
+ROWS = 4
+POINTS_PER_SIDE = COLS * ROWS  # 16
 
 
-class VestLayout:
-    def __init__(self, flip_vertical=False):
-        self.flip_vertical = flip_vertical
+def absolute(position, index):
+    """Per-side index -> official absolute index (front 0-15, back 16-31)."""
+    if position == BACK:
+        return index + POINTS_PER_SIDE
+    return index
 
-    def _row(self, row):
-        if self.flip_vertical:
-            return ROWS - 1 - row
-        return row
+
+class ProLayout:
+    """Named regions of the TactSuit Pro, in per-side motor indices."""
 
     def rows(self, rows):
-        """All point indices in the given rows (0 = top)."""
+        """All motor indices in the given rows (0 = top)."""
         out = []
         for row in rows:
-            r = self._row(row)
             for col in range(COLS):
-                out.append(r * COLS + col)
+                out.append(row * COLS + col)
         return out
 
     def cols(self, cols):
-        """All point indices in the given columns (0 = wearer's right side
-        as indexed; left/right mirroring is a calibration detail)."""
+        """All motor indices in the given columns (0 = wearer's left)."""
         out = []
         for row in range(ROWS):
-            r = self._row(row)
             for col in cols:
-                out.append(r * COLS + col)
+                out.append(row * COLS + col)
         return out
 
     def rows_cols(self, rows, cols):
         out = []
         for row in rows:
-            r = self._row(row)
             for col in cols:
-                out.append(r * COLS + col)
+                out.append(row * COLS + col)
         return out
 
     def all(self):
@@ -65,13 +71,13 @@ class VestLayout:
         return self.rows([0, 1])
 
     def mid(self):
-        return self.rows([2])
+        return self.rows([1, 2])
 
     def lower(self):
-        return self.rows([3, 4])
+        return self.rows([2, 3])
 
-    def belly(self):
-        return self.rows([4])
+    def bottom(self):
+        return self.rows([3])
 
-    def center_front(self):
-        return self.rows_cols([1, 2, 3], [1, 2])
+    def center(self, rows):
+        return self.rows_cols(rows, [1, 2])

@@ -13,7 +13,6 @@ _DEFAULTS = {
     "app_id": "dcs_bhaptics_bridge",
     "app_name": "DCS bHaptics Bridge",
     "master_scale": 1.0,
-    "flip_vertical": False,
     # [effects] thresholds
     "stall_aoa": 0.30,       # radians
     "g_onset": 2.00,         # G where the squeeze starts
