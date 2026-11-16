@@ -141,30 +141,6 @@ optional. Available settings: master intensity scale, per-effect switches,
 stall AoA threshold, G onset and full-scale values, and UDP and Player
 ports.
 
-## Notes
-
-- Player protocol: bHaptics' SDK1 websocket interface,
-  `ws://127.0.0.1:15881/v2/feedbacks`. JSON field names use PascalCase,
-  matching observed SDK1 client traffic. Confirmed working against
-  bHaptics Player on 2026-11-16.
-- Motor layout: the TactSuit Pro has 32 motors, 16 per side in a 4x4
-  grid. Effects are defined directly on those motors, numbered as in
-  bHaptics' Motor Index page: front 0-15, back 16-31, row-major from
-  the top-left of each side.
-- Grid translation: frames are submitted over the SDK1 protocol, whose
-  vest grid has 20 points per side. The bridge translates Pro motors to
-  grid points (`bhaptics_bridge/pro_map.py`). How Player maps the grid
-  onto the Pro is not published, so the built-in table is an assumption
-  and is marked as a seed in the code. Run
-  `python tools\calibrate_pro.py` once to measure the mapping on your
-  own suit; it writes `pro_mapping.json`, which the bridge then loads
-  automatically.
-- DCS provides no export signal for ejection. There is no ejection effect.
-- Multiplayer: the export script is installed in Saved Games and does not
-  modify DCS install files. Servers can restrict which export data is
-  available, and servers running pure scripts may reject clients with
-  script mods.
-
 ## Uninstall
 
 Delete the added line from `Export.lua`, delete the Lua file, and delete
