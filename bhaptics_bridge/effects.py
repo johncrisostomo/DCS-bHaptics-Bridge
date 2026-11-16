@@ -118,9 +118,13 @@ class EffectEngine:
         # the pull builds: the two lower rows from g_onset, row 1 from
         # ~45% of the range, the shoulder row from ~72%. Ordinary
         # maneuvering (below g_onset) stays silent. Negative G pulls high.
+        # Airborne only: on the gear the load reading is meaningless for
+        # feel, and a getter that has not started returning yet reads
+        # gy = 0, which the negative-G branch would otherwise sustain
+        # as a continuous chest vibration on the ramp.
         if cfg.effect_g:
             frames = None
-            if cur.gy >= cfg.g_onset:
+            if not cur.on_ground and cur.gy >= cfg.g_onset:
                 span = max(0.1, cfg.g_full - cfg.g_onset)
                 frac = min(1.0, (cur.gy - cfg.g_onset) / span)
                 points = {i: 25 + 45 * frac for i in layout.lower()}
@@ -136,7 +140,7 @@ class EffectEngine:
                     self._frame_points("g", FRONT, points, 160),
                     self._frame_points("g", BACK, points, 160),
                 ]
-            elif cur.gy <= cfg.neg_g_onset:
+            elif not cur.on_ground and cur.gy <= cfg.neg_g_onset:
                 intensity = 30 + (cfg.neg_g_onset - cur.gy) * 50.0
                 frames = [
                     self._frame("g", FRONT, layout.chest(), intensity, 160),

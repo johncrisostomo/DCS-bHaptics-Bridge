@@ -196,6 +196,17 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(any(i < 4 for i in idx))
         self.assertTrue(any(i >= 8 for i in idx))
 
+    def test_g_is_silent_on_the_ground(self):
+        # On the gear the load reading carries no feel, and a
+        # getter that has not started returning reads gy = 0 -
+        # inside the negative-G band. Neither may vibrate the
+        # vest on the ramp.
+        ground = dict(wow1=1, wow4=1, wow6=1, agl=0)
+        for gy in (0.0, 1.0, 5.5):
+            frames = self.feed(make_tel(gy=gy, **ground))
+            self.assertFalse(frames_with(frames, "g"),
+                             "g frame on the ground at gy=%s" % gy)
+
     def test_damage_pattern(self):
         base = dict(wow1=0, wow4=0, wow6=0, agl=500)
         self.feed(make_tel(warn=frozenset(), **base))
@@ -482,9 +493,13 @@ class Player2Tests(unittest.TestCase):
         self.assertEqual(values1[15], 40)   # front motor 15
         self.assertEqual(sum(values1), 120)
         self.assertEqual(dur1, 100)         # floored at the SDK2 minimum
-        self.assertEqual(values2[16], 60)   # back motor 0 -> absolute 16
-        self.assertEqual(sum(values2), 60)
-        self.assertEqual(dur2, 200)
+        # The second call is the composite: the first frame is
+        # still live, so its motors are still present alongside
+        # the back frame's (back motor 0 -> absolute 16).
+        self.assertEqual(values2[0], 80)
+        self.assertEqual(values2[16], 60)
+        self.assertEqual(sum(values2), 180)
+        self.assertGreater(dur2, 150)       # the 200 ms horizon
 
     def test_submit_pro_dot_is_direct(self):
         backend = _FakeBackend()
@@ -494,6 +509,35 @@ class Player2Tests(unittest.TestCase):
         _dur, values = backend.dot_calls[0]
         self.assertEqual(values[31], 70)    # back motor 15 -> absolute 31
         self.assertEqual(sum(values), 70)
+
+    def test_concurrent_frames_compose(self):
+        # Regression for the masked gun: each play_dot sets the
+        # whole vest, so submitting concurrent effects as separate
+        # calls zeroed each other's motors. Frames now compose -
+        # the merged call carries both effects at once.
+        backend = _FakeBackend()
+        player = self.make_player(backend)
+        player.submit(Frame("gun", FRONT, {1: 75, 2: 75}, 110))
+        player.submit(Frame("g", FRONT, {12: 35, 13: 35, 14: 35,
+                                         15: 35}, 160))
+        self.assertTrue(_wait_for(lambda: len(backend.dot_calls) >= 2))
+        _dur, values = backend.dot_calls[-1]
+        self.assertEqual(values[1], 75)     # gun motors survive
+        self.assertEqual(values[2], 75)
+        self.assertEqual(values[12], 35)    # alongside the G motors
+        self.assertEqual(sum(values), 75 + 75 + 4 * 35)
+
+    def test_contribution_expires_to_silence(self):
+        backend = _FakeBackend()
+        player = self.make_player(backend)
+        player.submit(Frame("g", FRONT, {0: 80}, 100))
+        self.assertTrue(_wait_for(lambda: len(backend.dot_calls) >= 1))
+
+        def silenced():
+            player.poll()
+            return any(all(v == 0 for v in vals)
+                       for _d, vals in backend.dot_calls[1:])
+        self.assertTrue(_wait_for(silenced, timeout=3.0))
 
     def test_init_refused_means_no_playback(self):
         backend = _FakeBackend(init_result=False)

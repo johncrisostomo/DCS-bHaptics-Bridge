@@ -128,6 +128,10 @@ class EffectLab:
     def set_state(self, data):
         if "gy" in data:
             self.gy = max(-1.0, min(9.0, float(data["gy"])))
+            if self.gy != 1.0:
+                # A load factor other than 1 only exists in flight;
+                # the engine (correctly) ignores G on the gear.
+                self.airborne = True
         if "burner" in data:
             self.burner = bool(data["burner"])
         if "airborne" in data:
