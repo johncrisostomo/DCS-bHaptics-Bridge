@@ -582,6 +582,46 @@ class Player2Tests(unittest.TestCase):
                        for _d, vals in backend.dot_calls[1:])
         self.assertTrue(_wait_for(silenced, timeout=3.0))
 
+    def test_sustained_identical_frames_are_refreshed(self):
+        # Regression for the high-G silence: the G effect clamps at
+        # full above g_full, so a pinned load submits an unchanging
+        # frame every cadence. The transport used to send that state
+        # once (~160 ms of playback) and suppress every repeat as
+        # "unchanged", so the vest went silent while the load held.
+        # An unchanged state that is still live must be re-sent
+        # before its playback lapses.
+        backend = _FakeBackend()
+        player = self.make_player(backend)
+        frame = Frame("g", FRONT, {i: 100 for i in range(16)}, 160)
+
+        def drive(seconds):
+            end = time.monotonic() + seconds
+            while time.monotonic() < end:
+                player.submit(frame)
+                player.poll()
+                time.sleep(0.06)
+
+        drive(0.4)
+        self.assertTrue(_wait_for(lambda: len(backend.dot_calls) >= 1))
+        first_phase = len(backend.dot_calls)
+        drive(0.6)
+        self.assertGreater(len(backend.dot_calls), first_phase)
+
+        # When the state ends, the vest is silenced once and the
+        # refresh does not keep the silence (or anything else)
+        # playing forever.
+        def silenced():
+            player.poll()
+            return any(all(v == 0 for v in vals)
+                       for _d, vals in backend.dot_calls)
+        self.assertTrue(_wait_for(silenced, timeout=3.0))
+        settled = len(backend.dot_calls)
+        end = time.monotonic() + 0.4
+        while time.monotonic() < end:
+            player.poll()
+            time.sleep(0.05)
+        self.assertEqual(len(backend.dot_calls), settled)
+
     def test_init_refused_means_no_playback(self):
         backend = _FakeBackend(init_result=False)
         player = self.make_player(backend)

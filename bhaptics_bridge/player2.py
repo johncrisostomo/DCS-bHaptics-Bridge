@@ -46,6 +46,8 @@ VEST_POSITION = 0          # device type 0 = TactSuit Pro
 MOTOR_COUNT = 32
 MIN_DURATION_MS = 100      # vendor recommendation for play_dot
 STATUS_REFRESH = 2.0       # seconds between device-info polls
+REFRESH_MARGIN_S = 0.06    # re-send a live unchanged state this long
+                           # before its playback lapses
 
 
 async def _maybe_await(value):
@@ -141,6 +143,7 @@ class BhapticsPlayer2:
         self._fetching = False
         self._contrib = []       # [(expiry, [32 values])] live frames
         self._sent = None        # last merged values sent to Player
+        self._sent_until = 0.0   # when the sent state's playback lapses
         self._vest_connected = None   # last is-connected answer
         self._vest_logged = "unset"   # last vest state written to the log
 
@@ -323,7 +326,8 @@ class BhapticsPlayer2:
         return True
 
     def _render(self, now):
-        """Send the merged vest state if it changed.
+        """Send the merged vest state when it changes, and refresh
+        it while it holds.
 
         Live contributions merge by element-wise maximum; expired
         ones drop out, so an effect ends by simply not being
@@ -340,7 +344,16 @@ class BhapticsPlayer2:
                 if v > merged[i]:
                     merged[i] = v
         if merged == self._sent:
-            return
+            if not self._contrib:
+                return  # the silence send already went out; done
+            if now < self._sent_until - REFRESH_MARGIN_S:
+                return  # unchanged, and its playback is still running
+            # Unchanged but still live, with the last send about to
+            # lapse: fall through and send it again. Dot playback is
+            # duration-based, so a sustained state whose value stops
+            # changing (the G effect pinned at full above g_full)
+            # would otherwise be sent once and go silent while the
+            # state still holds.
         if not self._contrib and self._sent is None:
             return  # never sent anything; nothing to silence
         duration_ms = MIN_DURATION_MS
@@ -348,6 +361,7 @@ class BhapticsPlayer2:
             duration_ms = max(MIN_DURATION_MS,
                               int((latest - now) * 1000))
         self._sent = merged
+        self._sent_until = now + duration_ms / 1000.0
         self._schedule(self._backend.play_dot(duration_ms, merged))
 
     def submit(self, frame):
@@ -370,6 +384,7 @@ class BhapticsPlayer2:
             return False
         self._contrib = []
         self._sent = None
+        self._sent_until = 0.0
         self._render(time.monotonic())
         return True
 
